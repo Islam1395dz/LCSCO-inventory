@@ -1,0 +1,437 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Laboratory system user profile with role-based access control and multi-lab assignments.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth unique user identifier",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Full name of the researcher, technician, or professor",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified institutional email address",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "role": {
+          "type": "string",
+          "enum": ["ADMIN", "PROFESSOR", "TECHNICIAN", "PHD_STUDENT", "GUEST"],
+          "description": "Assigned role governing permissions across inventory and audit workflows"
+        },
+        "laboratoryIds": {
+          "type": "array",
+          "description": "Array of laboratory IDs the user belongs to (max 20)",
+          "maxLength": 20
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "PENDING"],
+          "description": "Account activation status"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when user profile was created"
+        },
+        "lastLogin": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest session login"
+        }
+      },
+      "required": ["uid", "fullName", "email", "role", "laboratoryIds", "status", "createdAt", "lastLogin"]
+    },
+    "Laboratory": {
+      "title": "Laboratory",
+      "description": "Physical or organizational research laboratory unit.",
+      "type": "object",
+      "properties": {
+        "labId": {
+          "type": "string",
+          "description": "Unique laboratory identifier",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Official laboratory name and room designation",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when laboratory record was created"
+        }
+      },
+      "required": ["labId", "name", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Chemical catalog specification separated from physical containers.",
+      "type": "object",
+      "properties": {
+        "productId": {
+          "type": "string",
+          "description": "Unique catalog product ID",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "chemicalName": {
+          "type": "string",
+          "description": "IUPAC or common chemical name",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "casNumber": {
+          "type": "string",
+          "description": "CAS Registry Number (e.g., 67-64-1)",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "formula": {
+          "type": "string",
+          "description": "Molecular formula (e.g., C3H6O)",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "molecularWeight": {
+          "type": "number",
+          "description": "Molecular weight in g/mol"
+        },
+        "hazardClass": {
+          "type": "array",
+          "description": "GHS hazard classifications (max 10)",
+          "maxLength": 10
+        },
+        "storageRequirements": {
+          "type": "string",
+          "description": "Required storage conditions (e.g., Flammable Cabinet, Desiccator, -20°C)",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "defaultUnit": {
+          "type": "string",
+          "enum": ["g", "kg", "mg", "mL", "L"],
+          "description": "Standard measurement unit for this chemical"
+        },
+        "minimumStock": {
+          "type": "number",
+          "description": "Global minimum stock threshold across laboratories"
+        },
+        "reorderLevel": {
+          "type": "number",
+          "description": "Stock quantity threshold that triggers a reorder warning"
+        },
+        "sdsUrl": {
+          "type": "string",
+          "description": "Safety Data Sheet (SDS) reference URL or document link",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when product was cataloged"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when product was last updated"
+        }
+      },
+      "required": [
+        "productId",
+        "chemicalName",
+        "casNumber",
+        "formula",
+        "molecularWeight",
+        "hazardClass",
+        "storageRequirements",
+        "defaultUnit",
+        "minimumStock",
+        "reorderLevel",
+        "sdsUrl",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Container": {
+      "title": "Container",
+      "description": "Physical chemical bottle or vessel tracked by unique barcode/QR ID.",
+      "type": "object",
+      "properties": {
+        "containerId": {
+          "type": "string",
+          "description": "Unique physical container barcode/QR identifier (e.g., SOL-001)",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "productId": {
+          "type": "string",
+          "description": "Reference to catalog Product ID",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "laboratoryId": {
+          "type": "string",
+          "description": "Reference to owning Laboratory ID",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "initialQuantity": {
+          "type": "number",
+          "description": "Original full quantity of the container (> 0)"
+        },
+        "currentQuantity": {
+          "type": "number",
+          "description": "Real-time remaining quantity (>= 0)"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["g", "kg", "mg", "mL", "L"],
+          "description": "Physical measurement unit of the container"
+        },
+        "location": {
+          "type": "object",
+          "description": "Structured physical storage coordinates (building, room, unit, shelf, position, code)"
+        },
+        "storageCondition": {
+          "type": "string",
+          "description": "Verified actual storage condition",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "LOW_STOCK",
+            "NEARLY_EMPTY",
+            "NEEDS_IDENTIFICATION",
+            "QUARANTINED",
+            "DISPOSAL_REQUIRED",
+            "EXPIRED"
+          ],
+          "description": "Operational and safety state of the container"
+        },
+        "lotNumber": {
+          "type": "string",
+          "description": "Manufacturer batch/lot number",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "supplier": {
+          "type": "string",
+          "description": "Chemical supplier or vendor name",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "expiryDate": {
+          "type": "string",
+          "description": "ISO date string for chemical expiration",
+          "minLength": 4,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of container registration"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest modification"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "UID of the user who registered the container",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        }
+      },
+      "required": [
+        "containerId",
+        "productId",
+        "laboratoryId",
+        "initialQuantity",
+        "currentQuantity",
+        "unit",
+        "location",
+        "storageCondition",
+        "status",
+        "lotNumber",
+        "supplier",
+        "expiryDate",
+        "createdAt",
+        "updatedAt",
+        "createdBy"
+      ]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Immutable append-only audit trail entry recording every stock or status mutation.",
+      "type": "object",
+      "properties": {
+        "transactionId": {
+          "type": "string",
+          "description": "Unique transaction identifier",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["WITHDRAWAL", "ADDITION", "TRANSFER", "STATUS_CHANGE", "CORRECTION"],
+          "description": "Category of inventory mutation"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable server timestamp"
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID of user who executed the transaction",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userName": {
+          "type": "string",
+          "description": "Full name of the user at transaction time",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "laboratoryId": {
+          "type": "string",
+          "description": "Laboratory ID where the transaction occurred",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "containerId": {
+          "type": "string",
+          "description": "Target physical container ID",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "productId": {
+          "type": "string",
+          "description": "Catalog product ID of the container",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "quantityChange": {
+          "type": "number",
+          "description": "Signed or absolute delta quantity"
+        },
+        "quantityBefore": {
+          "type": "number",
+          "description": "Container quantity immediately prior to transaction"
+        },
+        "quantityAfter": {
+          "type": "number",
+          "description": "Container quantity immediately following transaction"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["g", "kg", "mg", "mL", "L"],
+          "description": "Measurement unit"
+        },
+        "oldLocation": {
+          "type": "string",
+          "description": "Location code prior to transaction",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "newLocation": {
+          "type": "string",
+          "description": "Location code following transaction",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "oldStatus": {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "LOW_STOCK",
+            "NEARLY_EMPTY",
+            "NEEDS_IDENTIFICATION",
+            "QUARANTINED",
+            "DISPOSAL_REQUIRED",
+            "EXPIRED"
+          ],
+          "description": "Container status prior to transaction"
+        },
+        "newStatus": {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "LOW_STOCK",
+            "NEARLY_EMPTY",
+            "NEEDS_IDENTIFICATION",
+            "QUARANTINED",
+            "DISPOSAL_REQUIRED",
+            "EXPIRED"
+          ],
+          "description": "Container status following transaction"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Mandatory audit justification provided by the user",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "transactionId",
+        "type",
+        "timestamp",
+        "userId",
+        "userName",
+        "laboratoryId",
+        "containerId",
+        "productId",
+        "quantityChange",
+        "quantityBefore",
+        "quantityAfter",
+        "unit",
+        "oldLocation",
+        "newLocation",
+        "oldStatus",
+        "newStatus",
+        "reason"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles containing role, assigned laboratories, and account status."
+    },
+    "/laboratories/{labId}": {
+      "schema": { "$ref": "#/entities/Laboratory" },
+      "description": "Registered research laboratories."
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Chemical catalog items with CAS, formula, hazard classes, and stock thresholds."
+    },
+    "/containers/{containerId}": {
+      "schema": { "$ref": "#/entities/Container" },
+      "description": "Physical chemical containers tracked by barcode/QR ID with real-time stock and location."
+    },
+    "/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Strictly append-only, immutable audit trail of all inventory actions."
+    }
+  }
+}

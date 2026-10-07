@@ -1,0 +1,418 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. GLOBAL SAFETY NET: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // PRIMITIVE HELPERS
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'islam.hasnaoui13@gmail.com';
+    }
+
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerified() &&
+        userDocExists() &&
+        getUserRole() == 'ADMIN'
+      );
+    }
+
+    function isAdminOrProf() {
+      return isBootstrappedAdmin() || (
+        isVerified() &&
+        userDocExists() &&
+        (getUserRole() == 'ADMIN' || getUserRole() == 'PROFESSOR')
+      );
+    }
+
+    function isTechOrAbove() {
+      return isBootstrappedAdmin() || (
+        isVerified() &&
+        userDocExists() &&
+        (getUserRole() == 'ADMIN' || getUserRole() == 'PROFESSOR' || getUserRole() == 'TECHNICIAN')
+      );
+    }
+
+    function isActiveLabMember() {
+      return isBootstrappedAdmin() || (
+        isVerified() &&
+        userDocExists() &&
+        (getUserRole() == 'ADMIN' || getUserRole() == 'PROFESSOR' || getUserRole() == 'TECHNICIAN' || getUserRole() == 'PHD_STUDENT')
+      );
+    }
+
+    // =========================================================================
+    // VALIDATION BLUEPRINTS
+    // =========================================================================
+    function isValidUnit(u) {
+      return u is string && (u == 'g' || u == 'kg' || u == 'mg' || u == 'mL' || u == 'L');
+    }
+
+    function isValidContainerStatus(s) {
+      return s is string && (
+        s == 'NORMAL' ||
+        s == 'LOW_STOCK' ||
+        s == 'NEARLY_EMPTY' ||
+        s == 'NEEDS_IDENTIFICATION' ||
+        s == 'QUARANTINED' ||
+        s == 'DISPOSAL_REQUIRED' ||
+        s == 'EXPIRED'
+      );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'fullName', 'email', 'role', 'laboratoryIds', 'status', 'createdAt', 'lastLogin']) &&
+        data.keys().hasOnly(['uid', 'fullName', 'email', 'role', 'laboratoryIds', 'status', 'createdAt', 'lastLogin']) &&
+        isValidId(data.uid) &&
+        data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.role is string && (
+          data.role == 'ADMIN' ||
+          data.role == 'PROFESSOR' ||
+          data.role == 'TECHNICIAN' ||
+          data.role == 'PHD_STUDENT' ||
+          data.role == 'GUEST'
+        ) &&
+        data.laboratoryIds is list && data.laboratoryIds.size() <= 20 &&
+        (data.laboratoryIds.size() == 0 || (data.laboratoryIds[0] is string && data.laboratoryIds[0].size() <= 128)) &&
+        data.status is string && (data.status == 'ACTIVE' || data.status == 'PENDING') &&
+        data.createdAt is timestamp &&
+        data.lastLogin is timestamp;
+    }
+
+    function isValidLaboratory(data) {
+      return data.keys().hasAll(['labId', 'name', 'createdAt']) &&
+        data.keys().hasOnly(['labId', 'name', 'createdAt']) &&
+        isValidId(data.labId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 150 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+          'productId', 'chemicalName', 'casNumber', 'formula', 'molecularWeight',
+          'hazardClass', 'storageRequirements', 'defaultUnit', 'minimumStock',
+          'reorderLevel', 'sdsUrl', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'productId', 'chemicalName', 'casNumber', 'formula', 'molecularWeight',
+          'hazardClass', 'storageRequirements', 'defaultUnit', 'minimumStock',
+          'reorderLevel', 'sdsUrl', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.productId) &&
+        data.chemicalName is string && data.chemicalName.size() >= 1 && data.chemicalName.size() <= 200 &&
+        data.casNumber is string && data.casNumber.size() >= 1 && data.casNumber.size() <= 32 &&
+        data.formula is string && data.formula.size() >= 1 && data.formula.size() <= 64 &&
+        data.molecularWeight is number && data.molecularWeight >= 0 &&
+        data.hazardClass is list && data.hazardClass.size() <= 10 &&
+        (data.hazardClass.size() == 0 || (data.hazardClass[0] is string && data.hazardClass[0].size() <= 100)) &&
+        data.storageRequirements is string && data.storageRequirements.size() >= 1 && data.storageRequirements.size() <= 200 &&
+        isValidUnit(data.defaultUnit) &&
+        data.minimumStock is number && data.minimumStock >= 0 &&
+        data.reorderLevel is number && data.reorderLevel >= 0 &&
+        data.sdsUrl is string && data.sdsUrl.size() <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidLocationMap(loc) {
+      return loc is map &&
+        loc.keys().hasAll(['building', 'room', 'unit', 'shelf', 'position', 'code']) &&
+        loc.keys().hasOnly(['building', 'room', 'unit', 'shelf', 'position', 'code']) &&
+        loc.building is string && loc.building.size() >= 1 && loc.building.size() <= 80 &&
+        loc.room is string && loc.room.size() >= 1 && loc.room.size() <= 80 &&
+        loc.unit is string && loc.unit.size() >= 1 && loc.unit.size() <= 80 &&
+        loc.shelf is string && loc.shelf.size() >= 1 && loc.shelf.size() <= 80 &&
+        loc.position is string && loc.position.size() >= 1 && loc.position.size() <= 80 &&
+        loc.code is string && loc.code.size() >= 1 && loc.code.size() <= 120;
+    }
+
+    function isValidContainer(data) {
+      return data.keys().hasAll([
+          'containerId', 'productId', 'laboratoryId', 'initialQuantity', 'currentQuantity',
+          'unit', 'location', 'storageCondition', 'status', 'lotNumber',
+          'supplier', 'expiryDate', 'createdAt', 'updatedAt', 'createdBy'
+        ]) &&
+        data.keys().hasOnly([
+          'containerId', 'productId', 'laboratoryId', 'initialQuantity', 'currentQuantity',
+          'unit', 'location', 'storageCondition', 'status', 'lotNumber',
+          'supplier', 'expiryDate', 'createdAt', 'updatedAt', 'createdBy'
+        ]) &&
+        isValidId(data.containerId) &&
+        isValidId(data.productId) &&
+        isValidId(data.laboratoryId) &&
+        data.initialQuantity is number && data.initialQuantity > 0 &&
+        data.currentQuantity is number && data.currentQuantity >= 0 &&
+        isValidUnit(data.unit) &&
+        isValidLocationMap(data.location) &&
+        data.storageCondition is string && data.storageCondition.size() >= 1 && data.storageCondition.size() <= 200 &&
+        isValidContainerStatus(data.status) &&
+        data.lotNumber is string && data.lotNumber.size() >= 1 && data.lotNumber.size() <= 80 &&
+        data.supplier is string && data.supplier.size() >= 1 && data.supplier.size() <= 120 &&
+        data.expiryDate is string && data.expiryDate.size() >= 4 && data.expiryDate.size() <= 40 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        isValidId(data.createdBy);
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll([
+          'transactionId', 'type', 'timestamp', 'userId', 'userName',
+          'laboratoryId', 'containerId', 'productId', 'quantityChange',
+          'quantityBefore', 'quantityAfter', 'unit', 'oldLocation',
+          'newLocation', 'oldStatus', 'newStatus', 'reason'
+        ]) &&
+        data.keys().hasOnly([
+          'transactionId', 'type', 'timestamp', 'userId', 'userName',
+          'laboratoryId', 'containerId', 'productId', 'quantityChange',
+          'quantityBefore', 'quantityAfter', 'unit', 'oldLocation',
+          'newLocation', 'oldStatus', 'newStatus', 'reason'
+        ]) &&
+        isValidId(data.transactionId) &&
+        data.type is string && (
+          data.type == 'WITHDRAWAL' ||
+          data.type == 'ADDITION' ||
+          data.type == 'TRANSFER' ||
+          data.type == 'STATUS_CHANGE' ||
+          data.type == 'CORRECTION'
+        ) &&
+        data.timestamp is timestamp &&
+        isValidId(data.userId) &&
+        data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120 &&
+        isValidId(data.laboratoryId) &&
+        isValidId(data.containerId) &&
+        isValidId(data.productId) &&
+        data.quantityChange is number &&
+        data.quantityBefore is number && data.quantityBefore >= 0 &&
+        data.quantityAfter is number && data.quantityAfter >= 0 &&
+        isValidUnit(data.unit) &&
+        data.oldLocation is string && data.oldLocation.size() >= 1 && data.oldLocation.size() <= 120 &&
+        data.newLocation is string && data.newLocation.size() >= 1 && data.newLocation.size() <= 120 &&
+        isValidContainerStatus(data.oldStatus) &&
+        isValidContainerStatus(data.newStatus) &&
+        data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 500;
+    }
+
+    // =========================================================================
+    // COLLECTION: users/{uid} (PII Isolated to Owner or Admin/Professor)
+    // =========================================================================
+    match /users/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (isOwner(uid) || isAdminOrProf());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdminOrProf());
+
+      allow create: if isVerified() &&
+        isValidId(uid) &&
+        isValidUser(incoming()) &&
+        incoming().uid == uid &&
+        incoming().createdAt == request.time &&
+        incoming().lastLogin == request.time &&
+        (
+          // Action 1: Self-registration (PHD_STUDENT or GUEST only, unless Bootstrapped Admin)
+          (isOwner(uid) && (
+            isBootstrappedAdmin() ||
+            ((incoming().role == 'PHD_STUDENT' || incoming().role == 'GUEST') && incoming().status == 'ACTIVE')
+          )) ||
+          // Action 2: Admin/Professor provisioning a user profile
+          isAdminOrProf()
+        );
+
+      allow update: if isVerified() &&
+        isValidId(uid) &&
+        isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          // Action 1: User updating own profile name or login timestamp (cannot touch role or status)
+          (isOwner(uid) &&
+            incoming().role == existing().role &&
+            incoming().status == existing().status &&
+            incoming().lastLogin == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'lastLogin', 'laboratoryIds'])
+          ) ||
+          // Action 2: Admin/Professor managing user role, status, or laboratory assignments
+          (isAdminOrProf() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'role', 'laboratoryIds', 'status', 'lastLogin'])
+          )
+        );
+
+      allow delete: if isVerified() && isValidId(uid) && isAdmin();
+    }
+
+    // =========================================================================
+    // COLLECTION: laboratories/{labId}
+    // =========================================================================
+    match /laboratories/{labId} {
+      allow get: if isSignedIn() && isValidId(labId) && existing().name.size() >= 1;
+      allow list: if isSignedIn() && existing().name.size() >= 1;
+
+      allow create: if isVerified() &&
+        isValidId(labId) &&
+        isValidLaboratory(incoming()) &&
+        incoming().labId == labId &&
+        incoming().createdAt == request.time &&
+        isTechOrAbove();
+
+      allow update: if isVerified() &&
+        isValidId(labId) &&
+        isValidLaboratory(incoming()) &&
+        incoming().labId == existing().labId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name']) &&
+        isAdminOrProf();
+
+      allow delete: if isVerified() && isValidId(labId) && isAdmin();
+    }
+
+    // =========================================================================
+    // COLLECTION: products/{productId}
+    // =========================================================================
+    match /products/{productId} {
+      allow get: if isSignedIn() && isValidId(productId) && existing().molecularWeight >= 0;
+      allow list: if isSignedIn() && existing().molecularWeight >= 0;
+
+      allow create: if isVerified() &&
+        isValidId(productId) &&
+        isValidProduct(incoming()) &&
+        incoming().productId == productId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isTechOrAbove();
+
+      allow update: if isVerified() &&
+        isValidId(productId) &&
+        isValidProduct(incoming()) &&
+        incoming().productId == existing().productId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'chemicalName', 'casNumber', 'formula', 'molecularWeight',
+          'hazardClass', 'storageRequirements', 'defaultUnit',
+          'minimumStock', 'reorderLevel', 'sdsUrl', 'updatedAt'
+        ]) &&
+        isTechOrAbove();
+
+      allow delete: if isVerified() && isValidId(productId) && isAdminOrProf();
+    }
+
+    // =========================================================================
+    // COLLECTION: containers/{containerId}
+    // =========================================================================
+    match /containers/{containerId} {
+      allow get: if isSignedIn() && isValidId(containerId) && existing().currentQuantity >= 0;
+      allow list: if isSignedIn() && existing().currentQuantity >= 0;
+
+      allow create: if isVerified() &&
+        isValidId(containerId) &&
+        isValidContainer(incoming()) &&
+        incoming().containerId == containerId &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isTechOrAbove() &&
+        exists(/databases/$(database)/documents/products/$(incoming().productId)) &&
+        exists(/databases/$(database)/documents/laboratories/$(incoming().laboratoryId));
+
+      allow update: if isVerified() &&
+        isValidId(containerId) &&
+        isValidContainer(incoming()) &&
+        incoming().containerId == existing().containerId &&
+        incoming().productId == existing().productId &&
+        incoming().initialQuantity == existing().initialQuantity &&
+        incoming().unit == existing().unit &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().updatedAt == request.time &&
+        // Terminal state gate: Once marked DISPOSAL_REQUIRED, only Admin/Prof can modify
+        (existing().status != 'DISPOSAL_REQUIRED' || isAdminOrProf()) &&
+        (
+          // Action 1: Admin / Professor full operational control
+          isAdminOrProf() ||
+          // Action 2: Routine Stock Withdrawal / Addition (Active Lab Member, container not locked)
+          (isActiveLabMember() &&
+            existing().status != 'NEEDS_IDENTIFICATION' &&
+            existing().status != 'QUARANTINED' &&
+            existing().status != 'DISPOSAL_REQUIRED' &&
+            existing().status != 'EXPIRED' &&
+            (incoming().status == 'NORMAL' || incoming().status == 'LOW_STOCK' || incoming().status == 'NEARLY_EMPTY') &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['currentQuantity', 'status', 'updatedAt'])
+          ) ||
+          // Action 3: Identification Problem or Quarantine Flagging (Any Active Lab Member)
+          (isActiveLabMember() &&
+            (incoming().status == 'NEEDS_IDENTIFICATION' || incoming().status == 'QUARANTINED') &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          // Action 4: Technician Inventory Check, Location Transfer, or Stock Correction
+          (isTechOrAbove() &&
+            incoming().status != 'DISPOSAL_REQUIRED' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'currentQuantity', 'location', 'storageCondition', 'status',
+              'laboratoryId', 'lotNumber', 'supplier', 'expiryDate', 'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerified() && isValidId(containerId) && isAdminOrProf();
+    }
+
+    // =========================================================================
+    // COLLECTION: transactions/{transactionId} (STRICTLY APPEND-ONLY AUDIT LOG)
+    // =========================================================================
+    match /transactions/{transactionId} {
+      allow get: if isSignedIn() && isValidId(transactionId) && existing().quantityBefore >= 0;
+      allow list: if isSignedIn() && existing().quantityBefore >= 0;
+
+      allow create: if isVerified() &&
+        isValidId(transactionId) &&
+        isValidTransaction(incoming()) &&
+        incoming().transactionId == transactionId &&
+        incoming().userId == request.auth.uid &&
+        incoming().timestamp == request.time &&
+        isActiveLabMember() &&
+        exists(/databases/$(database)/documents/containers/$(incoming().containerId)) &&
+        exists(/databases/$(database)/documents/products/$(incoming().productId));
+
+      // CRITICAL REQUIREMENT: Strictly append-only. No user (not even ADMIN) may update or delete.
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}
