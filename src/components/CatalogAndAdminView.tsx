@@ -77,15 +77,17 @@ export const CatalogAndAdminView: React.FC<CatalogAndAdminViewProps> = ({
   const [currentQty, setCurrentQty] = useState('1000');
   const [containerUnit, setContainerUnit] = useState<ChemicalUnit>(ChemicalUnit.MILLILITER);
 
-  // Separate Dropdowns/Fields for Physical Location: Room -> Cabinet -> Side -> Shelf -> Position
+  // Separate Dropdowns/Fields for Physical Location: Cabinet -> Level -> Side -> Position
   const [room, setRoom] = useState('204');
-  const [cabinet, setCabinet] = useState('FLAM-01');
-  const [side, setSide] = useState<'Left' | 'Right'>('Left');
+  const [cabinet, setCabinet] = useState(
+    physicalLocations[0]?.cabinet || 'CAB 1'
+  );
+  const [side, setSide] = useState<'Left' | 'Right'>('Right');
   const [shelf, setShelf] = useState('1');
   const [position, setPosition] = useState('01');
 
   const [storageCondition, setStorageCondition] = useState(
-    'Flammable Cabinet — Flammable solvent'
+    'CAB 1 — Laboratory Storage'
   );
   const [lotNumber, setLotNumber] = useState('');
   const [supplier, setSupplier] = useState('Sigma-Aldrich');
@@ -506,52 +508,25 @@ export const CatalogAndAdminView: React.FC<CatalogAndAdminViewProps> = ({
             </div>
           </div>
 
-          {/* Separate Dropdowns for Physical Location: Room -> Cabinet -> Side -> Shelf -> Position */}
+          {/* Separate Dropdowns for Physical Location: Cabinet -> Level -> Side -> Position */}
           <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-900">
                 <MapPin className="w-4 h-4 text-teal-700" />
                 <span>
                   {isFr
-                    ? 'Emplacement Physique (Salle → Armoire → Côté → Étagère → Position)'
-                    : 'Physical Location (Room → Cabinet → Side → Shelf → Position)'}
+                    ? 'Emplacement Physique (Armoire → Niveau → Côté)'
+                    : 'Physical Location (Cabinet → Level → Side)'}
                 </span>
               </div>
               <Badge variant="teal">{generatedLocationCode}</Badge>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  {isFr ? '1. Salle (Room)' : '1. Room'}
-                </label>
-                <select
-                  value={room}
-                  onChange={(e) => {
-                    const nextRoom = e.target.value;
-                    setRoom(nextRoom);
-                    const firstCab = physicalLocations.find((p) => p.room === nextRoom);
-                    if (firstCab) {
-                      setCabinet(firstCab.cabinet);
-                      setStorageCondition(
-                        `${firstCab.cabinetLabel} — ${firstCab.storageClassification}`
-                      );
-                    }
-                  }}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-                >
-                  {availableRooms.map((r) => (
-                    <option key={r} value={r}>
-                      Room {r}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  {isFr ? '2. Armoire (Cabinet)' : '2. Cabinet'}
-                </label>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                {isFr ? '1. Armoire (ex: CAB 1)' : '1. Cabinet (e.g. CAB 1)'}
+              </label>
+              {physicalLocations.length > 0 ? (
                 <select
                   value={cabinet}
                   onChange={(e) => {
@@ -559,23 +534,49 @@ export const CatalogAndAdminView: React.FC<CatalogAndAdminViewProps> = ({
                     setCabinet(nextCab);
                     const found = physicalLocations.find((p) => p.cabinet === nextCab);
                     if (found) {
+                      setRoom(found.room);
                       setStorageCondition(
                         `${found.cabinetLabel} — ${found.storageClassification}`
                       );
                     }
                   }}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-mono"
                 >
-                  {cabinetsForRoom.map((c) => (
+                  {physicalLocations.map((c) => (
                     <option key={c.id} value={c.cabinet}>
                       {c.cabinet} — {c.cabinetLabel}
                     </option>
                   ))}
                 </select>
-              </div>
+              ) : (
+                <input
+                  type="text"
+                  value={cabinet}
+                  onChange={(e) => setCabinet(e.target.value.toUpperCase())}
+                  placeholder="CAB 1"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-mono"
+                />
+              )}
             </div>
 
             <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  {isFr ? '2. Niveau (Level)' : '2. Level'}
+                </label>
+                <select
+                  value={shelf}
+                  onChange={(e) => setShelf(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-mono"
+                >
+                  {(activeCabinetConfig?.shelves || ['1', '2', '3', '4', '5']).map((sh) => (
+                    <option key={sh} value={sh}>
+                      Level {sh}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   {isFr ? '3. Côté (Side)' : '3. Side'}
@@ -585,31 +586,14 @@ export const CatalogAndAdminView: React.FC<CatalogAndAdminViewProps> = ({
                   onChange={(e) => setSide(e.target.value as 'Left' | 'Right')}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium"
                 >
-                  <option value="Left">{isFr ? 'Gauche (Left)' : 'Left'}</option>
-                  <option value="Right">{isFr ? 'Droit (Right)' : 'Right'}</option>
+                  <option value="Right">{isFr ? 'Côté droit (Right side)' : 'Right side'}</option>
+                  <option value="Left">{isFr ? 'Côté gauche (Left side)' : 'Left side'}</option>
                 </select>
               </div>
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
-                  {isFr ? '4. Étagère (Shelf)' : '4. Shelf'}
-                </label>
-                <select
-                  value={shelf}
-                  onChange={(e) => setShelf(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-mono"
-                >
-                  {(activeCabinetConfig?.shelves || ['1', '2', '3', '4']).map((sh) => (
-                    <option key={sh} value={sh}>
-                      Shelf {sh}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  {isFr ? '5. Position' : '5. Position'}
+                  {isFr ? '4. Position' : '4. Position'}
                 </label>
                 <select
                   value={position}
@@ -629,8 +613,8 @@ export const CatalogAndAdminView: React.FC<CatalogAndAdminViewProps> = ({
 
             <div className="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-2 flex items-center justify-between">
               <span>
-                <strong>Room {room}</strong> → <strong>Cabinet {cabinet}</strong> ({side} side)
-                → <strong>Shelf {shelf}</strong> → <strong>Position {position}</strong>
+                <strong>{cabinet}</strong> → <strong>Level {shelf}</strong> →{' '}
+                <strong>{side} side</strong>
               </span>
               <span className="font-mono font-bold text-teal-800">
                 {generatedLocationCode}

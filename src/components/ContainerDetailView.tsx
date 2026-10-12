@@ -940,13 +940,11 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
         </button>
 
         <div className="flex items-center gap-2 text-xs text-slate-500 font-mono">
-          <span>Room {locFields.room}</span>
-          <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
           <span>{locFields.cabinet}</span>
           <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-          <span>{locFields.side}</span>
+          <span>Level {locFields.shelf}</span>
           <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-          <span>Shelf {locFields.shelf}</span>
+          <span>{locFields.side} side</span>
           <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
           <span className="text-slate-900 font-semibold">{container.containerId}</span>
         </div>
@@ -1237,14 +1235,14 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
             <div className="text-xs font-medium text-slate-500">
               {isFr ? 'Emplacement physique' : 'Physical Location'}
             </div>
-            <div className="mt-1 text-sm font-semibold text-slate-900">
-              Room {locFields.room} → {locFields.cabinet} → {locFields.side}
+            <div className="mt-1 text-sm font-mono font-bold text-slate-900">
+              {locFields.code}
             </div>
             <div className="text-xs text-slate-600 mt-0.5">
-              Shelf {locFields.shelf} · Position {locFields.position}
+              {locFields.cabinetLabel}
             </div>
             <div className="text-[11px] text-teal-700 font-mono font-medium mt-0.5">
-              {locFields.code}
+              Position {locFields.position}
             </div>
           </div>
 
@@ -1443,7 +1441,7 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
               )}
           </div>
 
-          {/* Right Column: Clear Physical Location Display (Room -> Cabinet -> Side -> Shelf -> Position) */}
+          {/* Right Column: Clear Physical Location Display (CAB X- Level Y- Left/Right side) */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col justify-between space-y-5">
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -1456,15 +1454,15 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
               {/* Exact requested clean physical location block */}
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-500">{isFr ? 'Salle' : 'Room'}</span>
-                  <span className="font-semibold text-slate-900">
-                    {isFr ? `Salle ${locFields.room}` : `Room ${locFields.room}`}
+                  <span className="text-slate-500">{isFr ? 'Armoire' : 'Cabinet'}</span>
+                  <span className="font-semibold text-slate-900 text-right">
+                    {locFields.cabinet} — {locFields.cabinetLabel}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm border-t border-slate-200/70 pt-2">
-                  <span className="text-slate-500">{isFr ? 'Armoire' : 'Cabinet'}</span>
-                  <span className="font-semibold text-slate-900 text-right">
-                    Cabinet {locFields.cabinet} — {locFields.cabinetLabel}
+                  <span className="text-slate-500">{isFr ? 'Niveau' : 'Level'}</span>
+                  <span className="font-semibold text-slate-900">
+                    Level {locFields.shelf}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm border-t border-slate-200/70 pt-2">
@@ -1483,12 +1481,6 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
                       : isFr
                       ? 'Côté Droit (Right side)'
                       : 'Right side'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm border-t border-slate-200/70 pt-2">
-                  <span className="text-slate-500">{isFr ? 'Étagère' : 'Shelf'}</span>
-                  <span className="font-semibold text-slate-900">
-                    {isFr ? `Étagère ${locFields.shelf}` : `Shelf ${locFields.shelf}`}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-sm border-t border-slate-200/70 pt-2">
@@ -1511,7 +1503,7 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
                   size="sm"
                   onClick={() => setDetailTab('location')}
                 >
-                  {isFr ? 'Voir l’armoire' : 'View Cabinet Shelves'}
+                  {isFr ? 'Voir l’armoire' : 'View Cabinet Levels'}
                 </Button>
                 {canPerform(PermissionAction.MOVE_BETWEEN_LOCATIONS) && (
                   <Button
@@ -1537,12 +1529,12 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
             <div>
               <h2 className="text-base font-semibold text-slate-900">
                 {isFr
-                  ? `Plan physique : Salle ${locFields.room} → Armoire ${locFields.cabinet} (${locFields.cabinetLabel})`
-                  : `Physical Layout: Room ${locFields.room} → Cabinet ${locFields.cabinet} — ${locFields.cabinetLabel}`}
+                  ? `Armoire ${locFields.cabinet} — ${locFields.cabinetLabel}`
+                  : `${locFields.cabinet} — ${locFields.cabinetLabel}`}
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 {isFr
-                  ? 'Les côtés Gauche (Left) et Droit (Right) sont des emplacements physiques distincts.'
+                  ? 'Les côtés Gauche (Left side) et Droit (Right side) sont des emplacements physiques distincts.'
                   : 'Left side and Right side are separate physical compartments inside the cabinet.'}
               </p>
             </div>
@@ -1562,7 +1554,14 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {(['Left', 'Right'] as const).map((sideOption) => {
               const isCurrentSide = locFields.side === sideOption;
-              const shelvesToRender = ['1', '2', '3', '4'];
+              const shelvesToRender =
+                physicalLocations.find((p) => p.cabinet === locFields.cabinet)?.shelves || [
+                  '1',
+                  '2',
+                  '3',
+                  '4',
+                  '5',
+                ];
               return (
                 <div
                   key={sideOption}
@@ -1580,7 +1579,7 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
                         }`}
                       />
                       <span className="text-sm font-semibold text-slate-900">
-                        {locFields.cabinet} → {sideOption} Side
+                        {locFields.cabinet} — {sideOption} side
                       </span>
                     </div>
                     {isCurrentSide && (
@@ -1596,7 +1595,6 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
                       const itemsOnThisSideShelf = containers.filter((c) => {
                         const f = extractPhysicalLocationFields(c.location);
                         return (
-                          f.room === locFields.room &&
                           f.cabinet === locFields.cabinet &&
                           f.side === sideOption &&
                           f.shelf === sh
@@ -1614,7 +1612,7 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
                         >
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-mono font-semibold text-slate-700">
-                              {locFields.cabinet} → {sideOption} → Shelf {sh}
+                              {locFields.cabinet}- Level {sh}- {sideOption} side
                             </span>
                             <span className="text-[11px] text-slate-500">
                               {itemsOnThisSideShelf.length}{' '}
@@ -2162,60 +2160,53 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
         </form>
       </Modal>
 
-      {/* MODAL 5: Change Physical Location (Room -> Cabinet -> Side -> Shelf -> Position) */}
+      {/* MODAL 5: Change Physical Location (CAB X- Level Y- Left/Right side) */}
       <Modal
         open={showTransferModal}
         onClose={() => setShowTransferModal(false)}
         title={isFr ? 'Modifier l’emplacement physique' : 'Change Physical Location'}
         subtitle={
           isFr
-            ? 'Sélectionnez Salle → Armoire → Côté (Gauche/Droit) → Étagère → Position'
-            : 'Select Room → Cabinet → Side (Left/Right) → Shelf → Position'
+            ? 'Sélectionnez Armoire (CAB 1..4) → Niveau (Level) → Côté (Left/Right side) → Position'
+            : 'Select Cabinet (CAB 1..4) → Level → Side (Left/Right side) → Position'
         }
       >
         <form onSubmit={handleTransfer} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                {isFr ? '1. Salle (Room)' : '1. Room'}
-              </label>
-              <select
-                value={newRoom}
-                onChange={(e) => {
-                  const selectedR = e.target.value;
-                  setNewRoom(selectedR);
-                  const firstCab = physicalLocations.find((p) => p.room === selectedR);
-                  if (firstCab) setNewCabinet(firstCab.cabinet);
-                }}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                {availableRooms.map((r) => (
-                  <option key={r} value={r}>
-                    Room {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                {isFr ? '2. Armoire (Cabinet)' : '2. Cabinet'}
-              </label>
-              <select
-                value={newCabinet}
-                onChange={(e) => setNewCabinet(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
-              >
-                {cabinetsForSelectedRoom.map((c) => (
-                  <option key={c.id} value={c.cabinet}>
-                    {c.cabinet} — {c.cabinetLabel}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1">
+              {isFr ? '1. Armoire (Cabinet)' : '1. Cabinet'}
+            </label>
+            <select
+              value={newCabinet}
+              onChange={(e) => setNewCabinet(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+            >
+              {physicalLocations.map((c) => (
+                <option key={c.id} value={c.cabinet}>
+                  {c.cabinet} — {c.cabinetLabel}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                {isFr ? '2. Niveau (Level)' : '2. Level'}
+              </label>
+              <select
+                value={newShelf}
+                onChange={(e) => setNewShelf(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-mono"
+              >
+                {(selectedCabinetConfig?.shelves || ['1', '2', '3', '4', '5']).map((sh) => (
+                  <option key={sh} value={sh}>
+                    Level {sh}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
                 {isFr ? '3. Côté (Side)' : '3. Side'}
@@ -2225,31 +2216,14 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
                 onChange={(e) => setNewSide(e.target.value as 'Left' | 'Right')}
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-medium"
               >
-                <option value="Left">{isFr ? 'Gauche (Left)' : 'Left'}</option>
-                <option value="Right">{isFr ? 'Droit (Right)' : 'Right'}</option>
+                <option value="Left">{isFr ? 'Gauche (Left side)' : 'Left side'}</option>
+                <option value="Right">{isFr ? 'Droit (Right side)' : 'Right side'}</option>
               </select>
             </div>
 
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                {isFr ? '4. Étagère (Shelf)' : '4. Shelf'}
-              </label>
-              <select
-                value={newShelf}
-                onChange={(e) => setNewShelf(e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white font-mono"
-              >
-                {(selectedCabinetConfig?.shelves || ['1', '2', '3', '4']).map((sh) => (
-                  <option key={sh} value={sh}>
-                    Shelf {sh}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                {isFr ? '5. Position' : '5. Position'}
+                {isFr ? '4. Position' : '4. Position'}
               </label>
               <select
                 value={newPosition}
@@ -2271,8 +2245,7 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
             <div className="text-xs text-slate-600">
               <div className="font-semibold text-slate-900">
-                Room {newRoom} → {newCabinet} → {newSide} → Shelf {newShelf} → Position{' '}
-                {newPosition}
+                {newCabinet}- Level {newShelf}- {newSide} side · Position {newPosition}
               </div>
               <div className="text-slate-500 mt-0.5">
                 {selectedCabinetConfig?.cabinetLabel}
@@ -2564,8 +2537,7 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
               {product?.chemicalName || container.productId}
             </div>
             <div className="text-xs font-medium text-slate-800 mt-1">
-              Room {locFields.room} → {locFields.cabinet} → {locFields.side} → Shelf{' '}
-              {locFields.shelf} → Pos {locFields.position}
+              {locFields.cabinetLabel} · Pos {locFields.position}
             </div>
             <div className="text-xs font-mono text-teal-700 mt-0.5">{locFields.code}</div>
           </div>
@@ -2775,25 +2747,13 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
             <div className="text-xs font-semibold text-slate-800">
               {isFr
-                ? 'Emplacement Physique (Salle → Armoire → Côté → Étagère → Position)'
-                : 'Physical Location (Room → Cabinet → Side → Shelf → Position)'}
+                ? 'Emplacement Physique (CAB X- Level Y- Left/Right side)'
+                : 'Physical Location (CAB X- Level Y- Left/Right side)'}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div>
                 <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Salle' : 'Room'}
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editRoom}
-                  onChange={(e) => setEditRoom(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Armoire' : 'Cabinet'}
+                  {isFr ? 'Armoire (Cabinet)' : 'Cabinet'}
                 </label>
                 <select
                   value={editCabinet}
@@ -2809,20 +2769,7 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
               </div>
               <div>
                 <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Côté' : 'Side'}
-                </label>
-                <select
-                  value={editSide}
-                  onChange={(e) => setEditSide(e.target.value as 'Left' | 'Right')}
-                  className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-medium"
-                >
-                  <option value="Left">Left</option>
-                  <option value="Right">Right</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Étagère' : 'Shelf'}
+                  {isFr ? 'Niveau (Level)' : 'Level'}
                 </label>
                 <select
                   value={editShelf}
@@ -2835,12 +2782,26 @@ export const ContainerDetailView: React.FC<ContainerDetailViewProps> = ({
                       '2',
                       '3',
                       '4',
+                      '5',
                     ]
                   ).map((sh) => (
                     <option key={sh} value={sh}>
-                      Shelf {sh}
+                      Level {sh}
                     </option>
                   ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                  {isFr ? 'Côté (Side)' : 'Side'}
+                </label>
+                <select
+                  value={editSide}
+                  onChange={(e) => setEditSide(e.target.value as 'Left' | 'Right')}
+                  className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-medium"
+                >
+                  <option value="Left">Left side</option>
+                  <option value="Right">Right side</option>
                 </select>
               </div>
               <div>

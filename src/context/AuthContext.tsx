@@ -51,6 +51,7 @@ import {
   hasRolePermission,
 } from '../services/inventoryDomain';
 import {
+  clearAllFirestoreInventory,
   resetToFourTemporaryAccounts,
   seedInitialLabInventory,
 } from '../services/inventoryService';
@@ -121,7 +122,7 @@ export const INITIAL_TEMPORARY_USERS: UserProfile[] = TEMPORARY_LCSCO_ACCOUNTS.m
   lastLogin: '2026-10-06T08:00:00Z',
 }));
 
-const SHARED_STORAGE_KEY = 'lcsco_shared_inventory_state_v9';
+const SHARED_STORAGE_KEY = 'lcsco_shared_inventory_state_v11';
 
 const INITIAL_PREVIEW_LABS: Laboratory[] = [
   {
@@ -219,9 +220,34 @@ interface AuthAndInventoryContextValue {
     status?: ContainerStatus;
   }) => void;
   deleteContainerById: (containerId: string) => void;
-  // Demo Data Management
+  // Demo Data & Real Inventory Management
   resetDemoInventory: () => void;
   clearDemoInventory: () => void;
+  clearAllInventoryAndCabinets: () => Promise<void>;
+  importRealInventoryBatch: (params: {
+    cabinets: Array<{
+      cabinetCode: string;
+      cabinetLabel: string;
+      storageClassification?: string;
+      levels: string[];
+    }>;
+    reagents: Array<{
+      chemicalName: string;
+      casNumber?: string;
+      formula?: string;
+      molecularWeight?: number;
+      quantity: number;
+      unit: string;
+      cabinetCode: string;
+      level: string;
+      side: string;
+      position?: string;
+      chemicalClassification?: string;
+      supplier?: string;
+      lotNumber?: string;
+    }>;
+    replaceExisting?: boolean;
+  }) => Promise<{ cabinetsCount: number; reagentsCount: number }>;
   // Controlled Quantity Adjustment by Director and Lab Engineer
   adjustContainerQuantityDirectly: (params: {
     containerId: string;
@@ -307,9 +333,24 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
 
   const loadInitialCachedState = () => {
     try {
+      // Remove any legacy keys from older versions
+      localStorage.removeItem('lcsco_shared_inventory_state_v8');
+      localStorage.removeItem('lcsco_shared_inventory_state_v9');
+      localStorage.removeItem('lcsco_shared_inventory_state_v10');
       const raw = localStorage.getItem(SHARED_STORAGE_KEY);
       if (raw) {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        // Only use cached state if it has the new CAB 1..4 PDF format or was explicitly cleared in v11
+        if (
+          parsed &&
+          Array.isArray(parsed.containers) &&
+          parsed.containers.length > 0 &&
+          parsed.containers.every((c: any) =>
+            /^CAB\s+\d+/i.test(c?.location?.unit || '')
+          )
+        ) {
+          return parsed;
+        }
       }
     } catch {
       // Ignore storage errors
@@ -366,31 +407,27 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
 
     const applySharedData = (data: any) => {
       if (!data) return;
-      if (Array.isArray(data.containers) && data.containers.length > 0) {
-        // Only apply server state if it uses the new R204-... location format or has physicalLocations
-        const firstCode = data.containers[0]?.location?.code || '';
-        if (firstCode.startsWith('R') || Array.isArray(data.physicalLocations)) {
-          setContainers(data.containers);
-          if (Array.isArray(data.transactions)) setTransactions(data.transactions);
-          if (Array.isArray(data.products)) setProducts(data.products);
-          if (Array.isArray(data.laboratories)) setLaboratories(data.laboratories);
-          if (Array.isArray(data.adjustmentRequests))
-            setAdjustmentRequests(data.adjustmentRequests);
-          if (Array.isArray(data.disposalRequests)) setDisposalRequests(data.disposalRequests);
-          if (Array.isArray(data.purchaseRequests)) setPurchaseRequests(data.purchaseRequests);
-          if (Array.isArray(data.stockRuptureRequests))
-            setStockRuptureRequests(data.stockRuptureRequests);
-          if (Array.isArray(data.notifications)) setNotifications(data.notifications);
-          if (Array.isArray(data.physicalLocations)) setPhysicalLocations(data.physicalLocations);
-          if (data.labFloorPlanConfig) setLabFloorPlanConfig(data.labFloorPlanConfig);
-          if (Array.isArray(data.users)) {
-            setAllUsers(data.users);
-            setPreviewProfile((prev) => {
-              const updatedMe = data.users.find((u: UserProfile) => u.uid === prev.uid);
-              return updatedMe ? { ...prev, ...updatedMe } : prev;
-            });
-          }
-        }
+      if (Array.isArray(data.containers)) {
+        setContainers(data.containers);
+      }
+      if (Array.isArray(data.transactions)) setTransactions(data.transactions);
+      if (Array.isArray(data.products)) setProducts(data.products);
+      if (Array.isArray(data.laboratories)) setLaboratories(data.laboratories);
+      if (Array.isArray(data.adjustmentRequests))
+        setAdjustmentRequests(data.adjustmentRequests);
+      if (Array.isArray(data.disposalRequests)) setDisposalRequests(data.disposalRequests);
+      if (Array.isArray(data.purchaseRequests)) setPurchaseRequests(data.purchaseRequests);
+      if (Array.isArray(data.stockRuptureRequests))
+        setStockRuptureRequests(data.stockRuptureRequests);
+      if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+      if (Array.isArray(data.physicalLocations)) setPhysicalLocations(data.physicalLocations);
+      if (data.labFloorPlanConfig) setLabFloorPlanConfig(data.labFloorPlanConfig);
+      if (Array.isArray(data.users)) {
+        setAllUsers(data.users);
+        setPreviewProfile((prev) => {
+          const updatedMe = data.users.find((u: UserProfile) => u.uid === prev.uid);
+          return updatedMe ? { ...prev, ...updatedMe } : prev;
+        });
       }
     };
 
@@ -413,21 +450,8 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         const res = await fetch('/api/shared-state');
         if (!res.ok) return;
         const serverState = await res.json();
-        const serverFirstCode = serverState?.containers?.[0]?.location?.code || '';
-        const hasObsoletePreseededUsers =
-          Array.isArray(serverState?.users) &&
-          serverState.users.some((u: any) =>
-            ['temp-professor', 'temp-technician', 'temp-phd-student'].includes(u.uid)
-          );
-        const hasTenCabinets =
-          Array.isArray(serverState?.physicalLocations) &&
-          serverState.physicalLocations.length >= 10;
-        const isServerMigrated =
-          (serverFirstCode.startsWith('R') || Array.isArray(serverState?.physicalLocations)) &&
-          !hasObsoletePreseededUsers &&
-          hasTenCabinets;
 
-        if (serverState && serverState.version > lastSeenVersion && isServerMigrated) {
+        if (serverState && serverState.version > lastSeenVersion) {
           lastSeenVersion = serverState.version;
           applySharedData(serverState);
           try {
@@ -435,25 +459,6 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
           } catch {
             // Ignore quota errors
           }
-        } else if (serverState && (!isServerMigrated || serverState.version === 0)) {
-          const seedPayload = cachedState || {
-            containers: INITIAL_DEMO_CONTAINERS,
-            transactions: INITIAL_DEMO_TRANSACTIONS,
-            products: INITIAL_DEMO_PRODUCTS,
-            laboratories: INITIAL_PREVIEW_LABS,
-            users: INITIAL_TEMPORARY_USERS,
-            adjustmentRequests: INITIAL_DEMO_ADJUSTMENTS,
-            disposalRequests: INITIAL_DEMO_DISPOSALS,
-            purchaseRequests: INITIAL_DEMO_PURCHASES,
-            stockRuptureRequests: INITIAL_DEMO_RUPTURES,
-            notifications: INITIAL_DEMO_NOTIFICATIONS,
-            physicalLocations: INITIAL_PHYSICAL_LOCATIONS,
-          };
-          await fetch('/api/shared-state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(seedPayload),
-          });
         }
       } catch {
         // Ignore network errors
@@ -487,14 +492,10 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         const isBootstrapped = user.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
 
         if (!snap.exists()) {
-          const initialRole = isBootstrapped ? UserRole.ADMIN : UserRole.PHD_STUDENT;
+          const initialRole: UserRole = isBootstrapped ? UserRole.ADMIN : UserRole.PHD_STUDENT;
           const defaultName =
             initialRole === UserRole.ADMIN
               ? 'Director'
-              : initialRole === UserRole.TECHNICIAN
-              ? 'Lab Engineer'
-              : initialRole === UserRole.PROFESSOR
-              ? 'Professor'
               : 'PhD Student';
 
           const newProfileData = {
@@ -747,6 +748,7 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     stockRuptureRequests: StockRuptureRequest[];
     notifications: AppNotification[];
     physicalLocations: PhysicalLocationConfig[];
+    labFloorPlanConfig?: LabFloorPlanConfig;
   }) => {
     try {
       localStorage.setItem(SHARED_STORAGE_KEY, JSON.stringify(nextState));
@@ -1269,6 +1271,259 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       containers: containers.filter((c) => !c.isDemoData),
       transactions: transactions.filter((t) => !t.isDemoData),
     });
+  };
+
+  /**
+   * Deletes all reagents, containers, and cabinets from local state, shared state, and Firestore
+   */
+  const clearAllInventoryAndCabinets = async () => {
+    updatePreviewState({
+      products: [],
+      containers: [],
+      transactions: [],
+      adjustmentRequests: [],
+      disposalRequests: [],
+      purchaseRequests: [],
+      stockRuptureRequests: [],
+      notifications: [],
+      physicalLocations: [],
+    });
+    try {
+      await fetch('/api/shared-state/clear-all', { method: 'POST' });
+    } catch {
+      // Ignore offline error
+    }
+    if (firebaseUser) {
+      await clearAllFirestoreInventory();
+    }
+  };
+
+  /**
+   * Imports a structured batch of real cabinets and reagents using the exact location code format:
+   *   "CAB 1- Level 1- Right side"
+   */
+  const importRealInventoryBatch = async (params: {
+    cabinets: Array<{
+      cabinetCode: string;
+      cabinetLabel: string;
+      storageClassification?: string;
+      levels: string[];
+    }>;
+    reagents: Array<{
+      chemicalName: string;
+      casNumber?: string;
+      formula?: string;
+      molecularWeight?: number;
+      quantity: number;
+      unit: string;
+      cabinetCode: string;
+      level: string;
+      side: string;
+      position?: string;
+      chemicalClassification?: string;
+      supplier?: string;
+      lotNumber?: string;
+    }>;
+    replaceExisting?: boolean;
+  }): Promise<{ cabinetsCount: number; reagentsCount: number }> => {
+    const replaceExisting = params.replaceExisting !== false;
+
+    const normalizeCabCode = (raw: string): string => {
+      const clean = (raw || 'CAB 1').trim();
+      if (/^cab\b/i.test(clean)) {
+        return clean.replace(/^cab\s*[-:]?\s*/i, 'CAB ').toUpperCase();
+      }
+      if (/^\d+$/.test(clean)) {
+        return `CAB ${clean}`;
+      }
+      return `CAB ${clean.toUpperCase()}`;
+    };
+
+    const cabMap = new Map<string, PhysicalLocationConfig>();
+    if (!replaceExisting) {
+      physicalLocations.forEach((loc) => cabMap.set(loc.cabinet.toUpperCase(), loc));
+    }
+
+    for (const cab of params.cabinets || []) {
+      const code = normalizeCabCode(cab.cabinetCode);
+      const levels =
+        Array.isArray(cab.levels) && cab.levels.length > 0
+          ? Array.from(
+              new Set(
+                cab.levels.map(
+                  (l) =>
+                    String(l)
+                      .trim()
+                      .replace(/^(level|lvl|shelf|s)\s*[-:]?\s*/i, '') || '1'
+                )
+              )
+            )
+          : ['1', '2', '3', '4'];
+
+      cabMap.set(code, {
+        id: `CAB-${code.replace(/\s+/g, '-')}`,
+        room: '204',
+        cabinet: code,
+        cabinetLabel: cab.cabinetLabel?.trim() || `${code}`,
+        storageClassification: (cab.storageClassification ||
+          'General storage') as PhysicalLocationConfig['storageClassification'],
+        sides: ['Left', 'Right'],
+        shelves: levels,
+        positions: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10'],
+      });
+    }
+
+    const nextProducts: Product[] = replaceExisting ? [] : [...products];
+    const nextContainers: ChemicalContainer[] = replaceExisting ? [] : [...containers];
+    const nextTransactions: InventoryTransaction[] = replaceExisting ? [] : [...transactions];
+
+    const slotCounters = new Map<string, number>();
+
+    params.reagents.forEach((item, idx) => {
+      const cabCode = normalizeCabCode(item.cabinetCode);
+      const levelStr =
+        String(item.level || '1')
+          .trim()
+          .replace(/^(level|lvl|shelf|s)\s*[-:]?\s*/i, '')
+          .replace(/^0+(?=\d)/, '') || '1';
+      const sideVal: 'Left' | 'Right' = String(item.side || 'Right')
+        .trim()
+        .toLowerCase()
+        .startsWith('l')
+        ? 'Left'
+        : 'Right';
+
+      // Ensure cabinet exists in cabMap even if not listed in params.cabinets
+      if (!cabMap.has(cabCode)) {
+        cabMap.set(cabCode, {
+          id: `CAB-${cabCode.replace(/\s+/g, '-')}`,
+          room: '204',
+          cabinet: cabCode,
+          cabinetLabel: `${cabCode}`,
+          storageClassification: 'General storage',
+          sides: ['Left', 'Right'],
+          shelves: ['1', '2', '3', '4'],
+          positions: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10'],
+        });
+      } else {
+        const existingCab = cabMap.get(cabCode)!;
+        if (!existingCab.shelves.includes(levelStr)) {
+          existingCab.shelves = [...existingCab.shelves, levelStr].sort();
+        }
+      }
+
+      const slotKey = `${cabCode}-${levelStr}-${sideVal}`;
+      const nextSlotNum = (slotCounters.get(slotKey) || 0) + 1;
+      slotCounters.set(slotKey, nextSlotNum);
+      const posStr = item.position
+        ? String(item.position).replace(/^P/i, '').padStart(2, '0')
+        : String(nextSlotNum).padStart(2, '0');
+
+      const rawUnit = String(item.unit || 'g').trim().toLowerCase();
+      const unit: ChemicalUnit =
+        rawUnit === 'ml' || rawUnit.startsWith('millilit')
+          ? ChemicalUnit.MILLILITER
+          : rawUnit === 'l' || rawUnit.startsWith('lit')
+          ? ChemicalUnit.LITER
+          : rawUnit === 'kg'
+          ? ChemicalUnit.KILOGRAM
+          : rawUnit === 'mg'
+          ? ChemicalUnit.MILLIGRAM
+          : ChemicalUnit.GRAM;
+
+      const qty = Math.max(0.01, Number(item.quantity) || 500);
+      const prodId = `PROD-${idx + 1}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+      const contId = `REA-${String(idx + 1).padStart(3, '0')}`;
+
+      const loc = buildStorageLocation({
+        building: 'LCSCO',
+        room: '204',
+        unit: cabCode,
+        cabinetLabel: cabMap.get(cabCode)?.cabinetLabel || cabCode,
+        side: sideVal,
+        shelf: levelStr,
+        position: posStr,
+      });
+
+      const newProd: Product = {
+        productId: prodId,
+        chemicalName: item.chemicalName.trim(),
+        casNumber: item.casNumber?.trim() || 'N/A',
+        formula: item.formula?.trim() || '—',
+        molecularWeight: Number(item.molecularWeight) || 0,
+        hazardClass: ['GHS07 Irritant'],
+        storageRequirements: `${cabCode}- Level ${levelStr}- ${sideVal} side`,
+        defaultUnit: unit,
+        minimumStock: Math.round(qty * 0.2),
+        reorderLevel: Math.round(qty * 0.4),
+        sdsUrl:
+          item.casNumber && item.casNumber !== 'N/A'
+            ? `https://pubchem.ncbi.nlm.nih.gov/#query=${encodeURIComponent(item.casNumber)}`
+            : `https://pubchem.ncbi.nlm.nih.gov/#query=${encodeURIComponent(item.chemicalName)}`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        chemicalClassification: (item.chemicalClassification ||
+          'Other') as Product['chemicalClassification'],
+        storageClassification:
+          cabMap.get(cabCode)?.storageClassification || 'General storage',
+      };
+
+      const newCont: ChemicalContainer = {
+        containerId: contId,
+        productId: prodId,
+        laboratoryId: 'LCSCO',
+        initialQuantity: qty,
+        currentQuantity: qty,
+        unit,
+        location: loc,
+        storageCondition: `${loc.code}`,
+        status: computeStockStatus(qty, qty),
+        lotNumber: item.lotNumber?.trim() || `LOT-${new Date().getFullYear()}-${idx + 1}`,
+        supplier: item.supplier?.trim() || 'Sigma-Aldrich',
+        expiryDate: '2028-12-31',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        createdBy: effectiveProfile?.uid || 'temp-director',
+        chemicalClassification: newProd.chemicalClassification,
+        storageClassification: newProd.storageClassification,
+      };
+
+      nextProducts.push(newProd);
+      nextContainers.push(newCont);
+      nextTransactions.push({
+        transactionId: `IMP-${contId}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+        type: TransactionType.ADDITION,
+        timestamp: new Date().toISOString(),
+        userId: effectiveProfile?.uid || 'temp-director',
+        userName: effectiveProfile?.fullName || 'Director',
+        userRole: effectiveProfile?.role || UserRole.ADMIN,
+        laboratoryId: 'LCSCO',
+        containerId: contId,
+        productId: prodId,
+        quantityChange: qty,
+        quantityBefore: 0,
+        quantityAfter: qty,
+        unit,
+        oldLocation: loc.code,
+        newLocation: loc.code,
+        oldStatus: ContainerStatus.NORMAL,
+        newStatus: ContainerStatus.NORMAL,
+        reason: `Imported from laboratory inventory list (${loc.code})`,
+      });
+    });
+
+    const finalCabinets = Array.from(cabMap.values());
+    updatePreviewState({
+      physicalLocations: finalCabinets,
+      products: nextProducts,
+      containers: nextContainers,
+      transactions: nextTransactions,
+    });
+
+    return {
+      cabinetsCount: finalCabinets.length,
+      reagentsCount: nextContainers.length,
+    };
   };
 
   /**
@@ -2253,6 +2508,8 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         deleteContainerById,
         resetDemoInventory,
         clearDemoInventory,
+        clearAllInventoryAndCabinets,
+        importRealInventoryBatch,
         adjustContainerQuantityDirectly,
         sendRoleNotification,
         markNotificationAsRead,

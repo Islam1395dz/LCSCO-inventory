@@ -53,33 +53,36 @@ export function sanitizeId(raw: string): string {
 
 /**
  * Generates the standardized physical location code:
- * Room -> Cabinet -> Side -> Shelf -> Position
+ * Format: CAB <Cabinet>- Level <Shelf>- <Right|Left> side
  * Example:
- *   Room: 204, Cabinet: FLAM-01, Side: Left, Shelf: 2, Position: 01
- *   => R204-FLAM01-L-S02-P01
+ *   Cabinet: 1 (or CAB 1), Shelf/Level: 1, Side: Right
+ *   => CAB 1- Level 1- Right side
  */
 export function formatPhysicalLocationCode(params: {
-  room: string;
+  room?: string;
   unit: string;
   side?: 'Left' | 'Right' | string;
   shelf: string;
-  position: string;
+  position?: string;
 }): string {
-  const cleanRoom = (params.room || '204').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || '204';
-  const cleanCab = (params.unit || 'FLAM-01').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'FLAM01';
-  const sideChar =
-    String(params.side || 'Left')
-      .trim()
-      .toLowerCase()
-      .startsWith('r')
-      ? 'R'
-      : 'L';
-  const shelfDigits = String(params.shelf || '1').replace(/[^0-9]/g, '') || '1';
-  const shelfPad = shelfDigits.padStart(2, '0');
-  const posDigits = String(params.position || '01').replace(/[^0-9]/g, '') || '1';
-  const posPad = posDigits.padStart(2, '0');
+  const rawUnit = (params.unit || '1').trim();
+  const cabFormatted = /^cab\b/i.test(rawUnit)
+    ? rawUnit.replace(/^cab\s*[-:]?\s*/i, 'CAB ').toUpperCase()
+    : `CAB ${rawUnit.toUpperCase()}`;
 
-  return `R${cleanRoom}-${cleanCab}-${sideChar}-S${shelfPad}-P${posPad}`.slice(
+  const isRight = String(params.side || 'Left')
+    .trim()
+    .toLowerCase()
+    .startsWith('r');
+  const sideLabel = isRight ? 'Right side' : 'Left side';
+
+  const cleanShelf =
+    String(params.shelf || '1')
+      .trim()
+      .replace(/^(level|lvl|shelf|s)\s*[-:]?\s*/i, '')
+      .replace(/^0+(?=\d)/, '') || '1';
+
+  return `${cabFormatted}- Level ${cleanShelf}- ${sideLabel}`.slice(
     0,
     SCHEMA_CONSTRAINTS.LOCATION_CODE_MAX_LENGTH
   );
@@ -87,34 +90,36 @@ export function formatPhysicalLocationCode(params: {
 
 /**
  * Human-readable summary of a StorageLocation for tables & cards
- * Example: "Room 204 → FLAM-01 → Left → Shelf 2 → Pos 01"
+ * Example: "CAB 1- Level 1- Right side"
  */
 export function formatPhysicalLocationSummary(
   loc: StorageLocation,
   lang: 'en' | 'fr' = 'en'
 ): string {
-  const sideText =
-    loc.side === 'Right'
-      ? lang === 'fr'
-        ? 'Droite'
-        : 'Right'
-      : lang === 'fr'
-      ? 'Gauche'
-      : 'Left';
-  const shelfNum = String(loc.shelf || '1').replace(/^S/i, '').replace(/^0+/, '') || '1';
-  const posNum = String(loc.position || '01').replace(/^P/i, '').padStart(2, '0');
+  const rawUnit = (loc.unit || '1').trim();
+  const cabFormatted = /^cab\b/i.test(rawUnit)
+    ? rawUnit.replace(/^cab\s*[-:]?\s*/i, 'CAB ').toUpperCase()
+    : `CAB ${rawUnit.toUpperCase()}`;
+  const isRight =
+    loc.side === 'Right' ||
+    (loc.code && /right\s*side|-R-/i.test(loc.code));
+  const shelfNum =
+    String(loc.shelf || '1')
+      .replace(/^(level|lvl|shelf|s)\s*[-:]?\s*/i, '')
+      .replace(/^0+(?=\d)/, '') || '1';
+
   if (lang === 'fr') {
-    return `Salle ${loc.room} → ${loc.unit} → ${sideText} → Étagère ${shelfNum} → Pos ${posNum}`;
+    const sideFr = isRight ? 'Côté droit' : 'Côté gauche';
+    return `${cabFormatted}- Niveau ${shelfNum}- ${sideFr}`;
   }
-  return `Room ${loc.room} → ${loc.unit} → ${sideText} → Shelf ${shelfNum} → Position ${posNum}`;
+  const sideEn = isRight ? 'Right side' : 'Left side';
+  return `${cabFormatted}- Level ${shelfNum}- ${sideEn}`;
 }
 
 /**
  * Normalizes and validates a physical storage location hierarchy:
- * Room -> Cabinet -> Side (Left/Right) -> Shelf -> Position
- * Note: For strict Firestore rule compatibility (which checks keys `building, room, unit, shelf, position, code`),
- * `toFirestoreLocationMap` strips optional UI fields if writing to Firestore, while `buildStorageLocation`
- * preserves `side` and `cabinetLabel` in-memory and encodes them deterministically in `code`.
+ * Cabinet -> Level (Shelf) -> Side (Left/Right) -> Position
+ * Code format: "CAB 1- Level 1- Right side"
  */
 export function buildStorageLocation(
   loc: Omit<StorageLocation, 'code'> & { code?: string }
@@ -125,16 +130,25 @@ export function buildStorageLocation(
   const room = (loc.room || '204')
     .trim()
     .slice(0, SCHEMA_CONSTRAINTS.LOCATION_FIELD_MAX_LENGTH);
-  const unit = (loc.unit || 'FLAM-01')
-    .trim()
-    .toUpperCase()
-    .slice(0, SCHEMA_CONSTRAINTS.LOCATION_FIELD_MAX_LENGTH);
+  const rawUnit = (loc.unit || 'CAB 1').trim();
+  const unit = (
+    /^cab\b/i.test(rawUnit)
+      ? rawUnit.replace(/^cab\s*[-:]?\s*/i, 'CAB ').toUpperCase()
+      : /^\d+$/.test(rawUnit)
+      ? `CAB ${rawUnit}`
+      : rawUnit.toUpperCase()
+  ).slice(0, SCHEMA_CONSTRAINTS.LOCATION_FIELD_MAX_LENGTH);
+
   const side: 'Left' | 'Right' =
-    loc.side && String(loc.side).toLowerCase().startsWith('r') ? 'Right' : 'Left';
-  const rawShelf = String(loc.shelf || '1')
-    .trim()
-    .replace(/^S/i, '')
-    .replace(/^0+/, '') || '1';
+    (loc.side && String(loc.side).toLowerCase().startsWith('r')) ||
+    (loc.code && /right\s*side|-R-/i.test(loc.code))
+      ? 'Right'
+      : 'Left';
+  const rawShelf =
+    String(loc.shelf || '1')
+      .trim()
+      .replace(/^(level|lvl|shelf|s)\s*[-:]?\s*/i, '')
+      .replace(/^0+(?=\d)/, '') || '1';
   const rawPos = String(loc.position || '01')
     .trim()
     .replace(/^P/i, '')
@@ -151,7 +165,7 @@ export function buildStorageLocation(
   return {
     building: building || 'LCSCO',
     room: room || '204',
-    unit: unit || 'FLAM-01',
+    unit: unit || 'CAB 1',
     ...(loc.cabinetLabel ? { cabinetLabel: loc.cabinetLabel } : {}),
     side,
     shelf: rawShelf,

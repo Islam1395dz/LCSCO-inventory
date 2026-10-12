@@ -92,17 +92,16 @@ export function formatShortRoleName(role: UserRole): string {
 
 export function getCabinetDescriptiveLabel(unitCode: string): string {
   const clean = (unitCode || '').trim().toUpperCase();
-  if (clean === 'A' || clean === 'CAB-A' || clean.startsWith('FLAM')) return 'Cabinet A — Flammable Solvents';
-  if (clean === 'B' || clean === 'CAB-B' || clean.startsWith('HALO')) return 'Cabinet B — Halogenated Solvents';
-  if (clean === 'C' || clean === 'CAB-C' || clean.startsWith('ACID')) return 'Cabinet C — Corrosive Acids';
-  if (clean === 'D' || clean === 'CAB-D' || clean.startsWith('BASE')) return 'Cabinet D — Corrosive Bases & Amines';
-  if (clean === 'E' || clean === 'CAB-E' || clean.startsWith('OXID')) return 'Cabinet E — Oxidizing Agents';
-  if (clean === 'F' || clean === 'CAB-F' || clean.startsWith('DESC')) return 'Cabinet F — Reducing Agents & Desiccator';
-  if (clean === 'G' || clean === 'CAB-G' || clean.startsWith('CAB-02')) return 'Cabinet G — Inorganic Salts & Minerals';
-  if (clean === 'H' || clean === 'CAB-H' || clean.startsWith('SYN')) return 'Cabinet H — Organic Synthesis & Heterocycles';
-  if (clean === 'I' || clean === 'CAB-I' || clean.startsWith('GLOVE')) return 'Cabinet I — Organometallics & Catalysts';
-  if (clean === 'J' || clean === 'CAB-J' || clean.startsWith('COLD')) return 'Cabinet J — Cold Storage & Buffers (+4°C)';
-  return 'Storage Cabinet';
+  const numMatch = clean.match(/^(?:CAB(?:INET)?\s*[-:]?\s*)?(\d+)$/i);
+  if (numMatch) {
+    const n = numMatch[1];
+    if (n === '1') return 'Cabinet 1 - Hallway (Salts Cabinet)';
+    if (n === '2') return 'Cabinet 2 - Hallway (Esters, Aldehydes, Ketones, Alcohols, Acids)';
+    if (n === '3') return 'Cabinet 3 - Hallway (Amines Cabinet)';
+    if (n === '4') return 'Inside Organic Chemistry Synthesis Lab Cabinet';
+    return `Cabinet ${n}`;
+  }
+  return clean ? `${clean}` : 'Storage Cabinet';
 }
 
 export function extractPhysicalLocationFields(location: StorageLocation): {
@@ -114,17 +113,27 @@ export function extractPhysicalLocationFields(location: StorageLocation): {
   position: string;
   code: string;
 } {
-  const room = location.room || '204';
-  const cabinet = location.unit || 'A';
-  const cabinetLabel = location.cabinetLabel || getCabinetDescriptiveLabel(cabinet);
-  let side: 'Left' | 'Right' = location.side || 'Left';
-  if (!location.side && location.code) {
-    if (location.code.includes('-R-')) side = 'Right';
-    else if (location.code.includes('-L-')) side = 'Left';
+  const room = location?.room || '204';
+  const rawUnit = (location?.unit || 'CAB 1').trim();
+  const cabinet = /^cab\b/i.test(rawUnit)
+    ? rawUnit.replace(/^cab\s*[-:]?\s*/i, 'CAB ').toUpperCase()
+    : /^\d+$/.test(rawUnit)
+    ? `CAB ${rawUnit}`
+    : rawUnit.toUpperCase();
+  const cabinetLabel = location?.cabinetLabel || getCabinetDescriptiveLabel(cabinet);
+  let side: 'Left' | 'Right' = location?.side || 'Left';
+  if (!location?.side && location?.code) {
+    if (/right\s*side|-R-/i.test(location.code)) side = 'Right';
+    else if (/left\s*side|-L-/i.test(location.code)) side = 'Left';
   }
-  const shelf = String(location.shelf || '1').replace(/^S/i, '').replace(/^0+/, '') || '1';
-  const position = String(location.position || '01').replace(/^P/i, '').padStart(2, '0');
-  const code = location.code;
+  const shelf =
+    String(location?.shelf || '1')
+      .replace(/^(level|lvl|shelf|s)\s*[-:]?\s*/i, '')
+      .replace(/^0+(?=\d)/, '') || '1';
+  const position = String(location?.position || '01').replace(/^P/i, '').padStart(2, '0');
+  const code =
+    location?.code ||
+    `${cabinet}- Level ${shelf}- ${side === 'Right' ? 'Right side' : 'Left side'}`;
   return { room, cabinet, cabinetLabel, side, shelf, position, code };
 }
 

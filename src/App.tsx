@@ -19,6 +19,7 @@ import {
   Lock,
   LogOut,
   Menu,
+  Mic,
   QrCode,
   Repeat,
   Settings,
@@ -45,6 +46,7 @@ import { AuthenticationPage } from './components/AuthenticationPage';
 import { NotificationCenter } from './components/NotificationCenter';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { LCSCOLogo } from './components/LCSCOLogo';
+import { JarvisAssistant } from './components/JarvisAssistant';
 import { formatRoleLabel, formatShortRoleName } from './utils/formatters';
 
 export type AppRoute =
@@ -97,6 +99,7 @@ const MainShell: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState<boolean>(false);
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [jarvisOpen, setJarvisOpen] = useState<boolean>(false);
 
   // First-login mandatory password change state
   const [firstLoginNewPass, setFirstLoginNewPass] = useState<string>('');
@@ -524,8 +527,26 @@ const MainShell: React.FC = () => {
             })}
           </nav>
 
-          {/* Zone 3: Notifications | User Profile Dropdown ▾ | Mobile Menu */}
+          {/* Zone 3: JARVIS Voice AI | Notifications | User Profile Dropdown ▾ | Mobile Menu */}
           <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setJarvisOpen((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs font-mono font-semibold transition-all cursor-pointer ${
+                jarvisOpen
+                  ? 'bg-[#050B14] text-cyan-200 border-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.25)]'
+                  : 'bg-[#050B14] text-cyan-100 border-cyan-500/40 hover:border-cyan-400'
+              }`}
+              title={tr(
+                'Open JARVIS Voice Laboratory Assistant',
+                'Ouvrir l’assistant vocal JARVIS'
+              )}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              <Mic className="w-3.5 h-3.5 text-cyan-300" />
+              <span className="hidden sm:inline">JARVIS</span>
+            </button>
+
             <NotificationCenter
               onSelectContainer={navigateToContainer}
               onNavigateDashboard={() => navigateToRoute('dashboard')}
@@ -695,6 +716,7 @@ const MainShell: React.FC = () => {
         {activeRoute === 'dashboard' && (
           <DashboardView
             onSelectContainer={navigateToContainer}
+            onOpenJarvis={() => setJarvisOpen(true)}
             onNavigate={(r) => {
               if (r === 'calculator') {
                 handleOpenCalculator();
@@ -756,6 +778,12 @@ const MainShell: React.FC = () => {
           onSelectContainer={navigateToContainer}
         />
       </main>
+
+      <JarvisAssistant
+        onSelectContainer={navigateToContainer}
+        externalOpen={jarvisOpen}
+        onExternalOpenChange={setJarvisOpen}
+      />
 
       <OfflineIndicator />
 

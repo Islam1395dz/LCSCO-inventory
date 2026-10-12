@@ -1,7 +1,7 @@
 /**
  * Chemical Placement & Co-Location Compatibility Engine (`chemicalCompatibilityService.ts`)
  * Supports the physical hierarchy:
- *   Room -> Cabinet -> Side (Left / Right) -> Shelf -> Position
+ *   Cabinet (CAB 1, CAB 2, CAB 3, CAB 4) -> Level -> Side (Left / Right)
  */
 
 import { ChemicalContainer, Product } from '../types/inventory';
@@ -17,76 +17,36 @@ export interface PlacementZonePreset {
 
 export const LCSCO_PLACEMENT_ZONES: PlacementZonePreset[] = [
   {
-    id: 'ZONE-FLAM-01',
-    room: '204',
-    unit: 'FLAM-01',
-    label: 'Flammable Cabinet',
-    defaultCondition: 'Flammable Cabinet (15-25°C, Grounded)',
-    recommendedFor: 'Ketones, Alcohols, Esters, Ethers, Hydrocarbons, Aromatic Solvents',
+    id: 'ZONE-CAB-1',
+    room: 'Hallway',
+    unit: 'CAB 1',
+    label: 'Cabinet 1 - Hallway (Salts Cabinet)',
+    defaultCondition: 'CAB 1 — Salts & Inorganic Reagents',
+    recommendedFor: 'Salts, Inorganics, Metals, Bases, Reducing & Oxidizing Salts',
   },
   {
-    id: 'ZONE-CAB-02',
-    room: '204',
-    unit: 'CAB-02',
-    label: 'General Organic Synthesis Cabinet',
-    defaultCondition: 'Ambient Dry Synthesis Cabinet (20°C)',
-    recommendedFor: 'Salts, Aldehydes, Heterocycles, Indicators, Polymers, Surfactants',
+    id: 'ZONE-CAB-2',
+    room: 'Hallway',
+    unit: 'CAB 2',
+    label: 'Cabinet 2 - Hallway (Esters, Aldehydes, Ketones, Alcohols, Acids)',
+    defaultCondition: 'CAB 2 — Esters, Aldehydes, Ketones, Alcohols, Acids',
+    recommendedFor: 'Esters, Aldehydes, Halogenoalkanes, Ketones, Alcohols, Ethers, Carboxylic Acids',
   },
   {
-    id: 'ZONE-HALO-01',
-    room: '204',
-    unit: 'HALO-01',
-    label: 'Ventilated Halogenated Solvent Cabinet',
-    defaultCondition: 'Ventilated Halogenated Solvent Extraction Cabinet',
-    recommendedFor: 'Dichloromethane, Chloroform, Halogenated Compounds',
+    id: 'ZONE-CAB-3',
+    room: 'Hallway',
+    unit: 'CAB 3',
+    label: 'Cabinet 3 - Hallway (Amines Cabinet)',
+    defaultCondition: 'CAB 3 — Amines, Amino Acids & Heterocycles',
+    recommendedFor: 'Amines, Aromatic Amines, Amino Acids, Amides, Heterocycles, Bases',
   },
   {
-    id: 'ZONE-ACID-01',
-    room: '308',
-    unit: 'ACID-01',
-    label: 'Polyethylene Acid Corrosives Cabinet',
-    defaultCondition: 'HDPE Corrosion-Proof Acid Cabinet',
-    recommendedFor: 'Mineral Acids (HCl, H2SO4, HNO3) & Carboxylic Acids',
-  },
-  {
-    id: 'ZONE-BASE-01',
-    room: '308',
-    unit: 'BASE-01',
-    label: 'Corrosive Base & Caustics Cabinet',
-    defaultCondition: 'Dedicated Alkaline Corrosives Cabinet',
-    recommendedFor: 'Sodium Hydroxide, Potassium Hydroxide, Inorganic Bases',
-  },
-  {
-    id: 'ZONE-DESC-01',
-    room: '204',
-    unit: 'DESC-01',
-    label: 'Dry Nitrogen Desiccator Cabinet',
-    defaultCondition: 'Dry N2 Purge Desiccator (RH < 5%)',
-    recommendedFor: 'Reducing Agents (NaBH4, LiAlH4) & Water-Reactive Hydrides',
-  },
-  {
-    id: 'ZONE-GLOVE-01',
-    room: '101',
-    unit: 'GLOVE-01',
-    label: 'Inert Argon Glovebox (<0.5 ppm O2)',
-    defaultCondition: 'Inert Argon Glovebox (< 0.5 ppm O2 / H2O)',
-    recommendedFor: 'Organometallic Catalysts (Pd/C, Pd(PPh3)4) & Pyrophorics',
-  },
-  {
-    id: 'ZONE-OXID-01',
-    room: '308',
-    unit: 'OXID-01',
-    label: 'Dedicated Oxidizer Safety Cabinet',
-    defaultCondition: 'Segregated Inorganic Oxidizer Cabinet',
-    recommendedFor: 'Permanganates, Peroxides, Nitrates & Oxidizing Agents',
-  },
-  {
-    id: 'ZONE-COLD-01',
-    room: '101',
-    unit: 'COLD-01',
-    label: 'Explosion-Proof Cold Storage (+4°C / -20°C)',
-    defaultCondition: 'ATEX Explosion-Proof Refrigerator (+4°C)',
-    recommendedFor: 'Buffers, Thermolabile Reagents & Monomers',
+    id: 'ZONE-CAB-4',
+    room: 'Synthesis Lab',
+    unit: 'CAB 4',
+    label: 'Inside Organic Chemistry Synthesis Lab Cabinet',
+    defaultCondition: 'CAB 4 — Organic Chemistry Synthesis Lab Cabinet',
+    recommendedFor: 'Synthesis Solvents, Aldehydes, Ketones, Esters, Drying Salts',
   },
 ];
 
@@ -280,21 +240,13 @@ export function evaluateLocalPlacementCompatibility(
     }
   }
 
-  let recommendedZone = 'CAB-02 (Room 204 — General Organic Synthesis Cabinet)';
-  if (candFlags.isPyrophoric) {
-    recommendedZone = 'GLOVE-01 (Room 101 — Inert Argon Glovebox)';
-  } else if (candFlags.isWaterReactive) {
-    recommendedZone = 'DESC-01 (Room 204 — Dry Nitrogen Desiccator)';
-  } else if (candFlags.isStrongAcid) {
-    recommendedZone = 'ACID-01 (Room 308 — Polyethylene Acid Cabinet)';
-  } else if (candFlags.isStrongBase) {
-    recommendedZone = 'BASE-01 (Room 308 — Corrosive Base Cabinet)';
-  } else if (candFlags.isOxidizer) {
-    recommendedZone = 'OXID-01 (Room 308 — Oxidizer Safety Cabinet)';
-  } else if (candFlags.isHalogenated) {
-    recommendedZone = 'HALO-01 (Room 204 — Ventilated Halogenated Solvent Cabinet)';
-  } else if (candFlags.isFlammable) {
-    recommendedZone = 'FLAM-01 (Room 204 — Flammable Cabinet)';
+  let recommendedZone = 'CAB 4 (Inside Organic Chemistry Synthesis Lab Cabinet)';
+  if (candFlags.isStrongBase) {
+    recommendedZone = 'CAB 3 (Cabinet 3 - Hallway — Amines Cabinet)';
+  } else if (candFlags.isStrongAcid || candFlags.isFlammable || candFlags.isHalogenated) {
+    recommendedZone = 'CAB 2 (Cabinet 2 - Hallway — Esters, Aldehydes, Ketones, Alcohols, Acids)';
+  } else if (candFlags.isOxidizer || candFlags.isWaterReactive) {
+    recommendedZone = 'CAB 1 (Cabinet 1 - Hallway — Salts Cabinet)';
   }
 
   const hasCritical = conflicts.some((c) => c.severity === 'CRITICAL');

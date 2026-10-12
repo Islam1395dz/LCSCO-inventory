@@ -16,6 +16,10 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError } from '../firebase';
 import {
+  INITIAL_DEMO_CONTAINERS,
+  INITIAL_DEMO_PRODUCTS,
+} from '../data/demoInventoryData';
+import {
   ChemicalContainer,
   ChemicalUnit,
   ContainerStatus,
@@ -857,250 +861,84 @@ export async function resetToFourTemporaryAccounts(currentAuthUid?: string): Pro
  */
 export async function seedInitialLabInventory(actor: TransactionActor): Promise<void> {
   try {
-    const existingProducts = await getDocs(collection(db, 'products'));
-    if (!existingProducts.empty) {
-      return;
-    }
-
-    // 1. Create the single LCSCO Laboratory
     await setDoc(doc(db, 'laboratories', 'LCSCO'), {
       labId: 'LCSCO',
       name: 'LCSCO — Laboratoire de Catalyse et Synthèse en Chimie Organique',
       createdAt: serverTimestamp(),
     });
 
-    // 2. Create Chemical Catalog Products
-    const products: Array<Omit<Product, 'createdAt' | 'updatedAt'>> = [
-      {
-        productId: 'PROD-ACETONE',
-        chemicalName: 'Acetone (HPLC Plus Grade, >=99.9%)',
-        casNumber: '67-64-1',
-        formula: 'C3H6O',
-        molecularWeight: 58.08,
-        hazardClass: ['GHS02 Flammable', 'GHS07 Irritant'],
-        storageRequirements: 'Flammable Cabinet (15-25°C)',
-        defaultUnit: ChemicalUnit.MILLILITER,
-        minimumStock: 1000,
-        reorderLevel: 2500,
-        sdsUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/Acetone',
-      },
-      {
-        productId: 'PROD-DCM',
-        chemicalName: 'Dichloromethane (Anhydrous, >=99.8%)',
-        casNumber: '75-09-2',
-        formula: 'CH2Cl2',
-        molecularWeight: 84.93,
-        hazardClass: ['GHS08 Health Hazard', 'GHS07 Irritant'],
-        storageRequirements: 'Ventilated Halogenated Solvent Cabinet',
-        defaultUnit: ChemicalUnit.MILLILITER,
-        minimumStock: 500,
-        reorderLevel: 1500,
-        sdsUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/Dichloromethane',
-      },
-      {
-        productId: 'PROD-NABH4',
-        chemicalName: 'Sodium Borohydride (ReagentPlus, 99%)',
-        casNumber: '16940-66-2',
-        formula: 'NaBH4',
-        molecularWeight: 37.83,
-        hazardClass: ['GHS02 Water-Reactive', 'GHS05 Corrosive', 'GHS06 Acute Toxic'],
-        storageRequirements: 'Desiccator Cabinet (Dry Nitrogen Purge)',
-        defaultUnit: ChemicalUnit.GRAM,
-        minimumStock: 100,
-        reorderLevel: 250,
-        sdsUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/Sodium-borohydride',
-      },
-      {
-        productId: 'PROD-HCL',
-        chemicalName: 'Hydrochloric Acid (ACS Reagent, 37%)',
-        casNumber: '7647-01-0',
-        formula: 'HCl',
-        molecularWeight: 36.46,
-        hazardClass: ['GHS05 Corrosive', 'GHS07 Acute Toxic'],
-        storageRequirements: 'Polyethylene Acid Corrosives Cabinet',
-        defaultUnit: ChemicalUnit.MILLILITER,
-        minimumStock: 500,
-        reorderLevel: 1000,
-        sdsUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/Hydrochloric-acid',
-      },
-      {
-        productId: 'PROD-PD-C',
-        chemicalName: 'Palladium on Carbon (10 wt.% loading, matrix activated)',
-        casNumber: '7440-05-3',
-        formula: 'Pd/C',
-        molecularWeight: 106.42,
-        hazardClass: ['GHS02 Pyrophoric Solid', 'GHS07 Irritant'],
-        storageRequirements: 'Inert Argon Glovebox / Fireproof Safe',
-        defaultUnit: ChemicalUnit.GRAM,
-        minimumStock: 10,
-        reorderLevel: 25,
-        sdsUrl: 'https://pubchem.ncbi.nlm.nih.gov/compound/Palladium',
-      },
-    ];
+    const existingContainers = await getDocs(collection(db, 'containers'));
+    const hasOldTrialContainers = existingContainers.docs.some((d) => {
+      const data = d.data();
+      const unitCode = String(data?.location?.unit || '');
+      return !d.id.startsWith('REA-') || !/^CAB\s+[1234]$/i.test(unitCode);
+    });
 
-    for (const p of products) {
-      await setDoc(doc(db, 'products', p.productId), {
-        ...p,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+    if (hasOldTrialContainers || existingContainers.empty) {
+      // Wipe all old trial containers and products
+      for (const d of existingContainers.docs) {
+        await deleteDoc(doc(db, 'containers', d.id));
+      }
+      const existingProducts = await getDocs(collection(db, 'products'));
+      for (const d of existingProducts.docs) {
+        await deleteDoc(doc(db, 'products', d.id));
+      }
 
-    // 3. Create Physical Containers
-    const sampleContainers = [
-      {
-        containerId: 'SOL-001',
-        productId: 'PROD-ACETONE',
-        laboratoryId: 'LCSCO',
-        initialQuantity: 2500,
-        currentQuantity: 1850,
-        unit: ChemicalUnit.MILLILITER,
-        location: toFirestoreLocationMap(
-          buildStorageLocation({
-            building: 'LCSCO',
-            room: '204',
-            unit: 'A',
-            side: 'Left',
-            shelf: '1',
-            position: '01',
-          })
-        ),
-        storageCondition: 'Cabinet A — Flammable Solvents (20°C Verified)',
-        status: ContainerStatus.NORMAL,
-        lotNumber: 'SHBP4821V',
-        supplier: 'Sigma-Aldrich',
-        expiryDate: '2028-06-30',
-      },
-      {
-        containerId: 'SOL-002',
-        productId: 'PROD-DCM',
-        laboratoryId: 'LCSCO',
-        initialQuantity: 1000,
-        currentQuantity: 180,
-        unit: ChemicalUnit.MILLILITER,
-        location: toFirestoreLocationMap(
-          buildStorageLocation({
-            building: 'LCSCO',
-            room: '204',
-            unit: 'B',
-            side: 'Left',
-            shelf: '1',
-            position: '02',
-          })
-        ),
-        storageCondition: 'Cabinet B — Halogenated Solvent Cabinet',
-        status: ContainerStatus.LOW_STOCK,
-        lotNumber: 'MKCR9910A',
-        supplier: 'Merck Millipore',
-        expiryDate: '2027-11-15',
-      },
-      {
-        containerId: 'REA-104',
-        productId: 'PROD-NABH4',
-        laboratoryId: 'LCSCO',
-        initialQuantity: 500,
-        currentQuantity: 35,
-        unit: ChemicalUnit.GRAM,
-        location: toFirestoreLocationMap(
-          buildStorageLocation({
-            building: 'LCSCO',
-            room: '204',
-            unit: 'F',
-            side: 'Left',
-            shelf: '1',
-            position: '02',
-          })
-        ),
-        storageCondition: 'Cabinet F — Dry N2 Desiccator (RH < 5%)',
-        status: ContainerStatus.NEARLY_EMPTY,
-        lotNumber: 'STBK1102',
-        supplier: 'Thermo Scientific',
-        expiryDate: '2026-10-25',
-      },
-      {
-        containerId: 'ACD-201',
-        productId: 'PROD-HCL',
-        laboratoryId: 'LCSCO',
-        initialQuantity: 2500,
-        currentQuantity: 1420,
-        unit: ChemicalUnit.MILLILITER,
-        location: toFirestoreLocationMap(
-          buildStorageLocation({
-            building: 'LCSCO',
-            room: '204',
-            unit: 'C',
-            side: 'Left',
-            shelf: '1',
-            position: '01',
-          })
-        ),
-        storageCondition: 'Cabinet C — Corrosive Acids Cabinet',
-        status: ContainerStatus.NEEDS_IDENTIFICATION,
-        lotNumber: 'ALDR-7731',
-        supplier: 'Fisher Chemical',
-        expiryDate: '2027-04-01',
-      },
-      {
-        containerId: 'CAT-309',
-        productId: 'PROD-PD-C',
-        laboratoryId: 'LCSCO',
-        initialQuantity: 50,
-        currentQuantity: 42.5,
-        unit: ChemicalUnit.GRAM,
-        location: toFirestoreLocationMap(
-          buildStorageLocation({
-            building: 'LCSCO',
-            room: '204',
-            unit: 'I',
-            side: 'Left',
-            shelf: '1',
-            position: '01',
-          })
-        ),
-        storageCondition: 'Cabinet I — Inert Argon Glovebox (< 0.5 ppm O2)',
-        status: ContainerStatus.NORMAL,
-        lotNumber: 'ALFA-90182',
-        supplier: 'Alfa Aesar',
-        expiryDate: '2028-01-15',
-      },
-    ];
+      // Seed the PDF products and containers
+      for (const prod of INITIAL_DEMO_PRODUCTS) {
+        await setDoc(doc(db, 'products', prod.productId), {
+          productId: prod.productId,
+          chemicalName: prod.chemicalName,
+          casNumber: prod.casNumber,
+          formula: prod.formula,
+          molecularWeight: prod.molecularWeight,
+          hazardClass: prod.hazardClass,
+          storageRequirements: prod.storageRequirements,
+          defaultUnit: prod.defaultUnit,
+          minimumStock: prod.minimumStock,
+          reorderLevel: prod.reorderLevel,
+          sdsUrl: prod.sdsUrl,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
 
-    for (const c of sampleContainers) {
-      await setDoc(doc(db, 'containers', c.containerId), {
-        ...c,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        createdBy: actor.uid,
-      });
-
-      const txId = generateTransactionId('SEED');
-      await setDoc(doc(db, 'transactions', txId), {
-        transactionId: txId,
-        type:
-          c.status === ContainerStatus.NEEDS_IDENTIFICATION
-            ? TransactionType.STATUS_CHANGE
-            : TransactionType.ADDITION,
-        timestamp: serverTimestamp(),
-        userId: actor.uid,
-        userName: actor.fullName.slice(0, SCHEMA_CONSTRAINTS.FULL_NAME_MAX_LENGTH),
-        laboratoryId: c.laboratoryId,
-        containerId: c.containerId,
-        productId: c.productId,
-        quantityChange: c.currentQuantity,
-        quantityBefore: 0,
-        quantityAfter: c.currentQuantity,
-        unit: c.unit,
-        oldLocation: c.location.code,
-        newLocation: c.location.code,
-        oldStatus: ContainerStatus.NORMAL,
-        newStatus: c.status,
-        reason:
-          c.status === ContainerStatus.NEEDS_IDENTIFICATION
-            ? 'Acid vapor corroded outer thermal barcode; flagged for Professor / Lab Director verification.'
-            : `Initial LCSCO inventory registration (Lot ${c.lotNumber})`,
-      });
+      for (const cont of INITIAL_DEMO_CONTAINERS) {
+        await setDoc(doc(db, 'containers', cont.containerId), {
+          containerId: cont.containerId,
+          productId: cont.productId,
+          laboratoryId: 'LCSCO',
+          initialQuantity: cont.initialQuantity,
+          currentQuantity: cont.currentQuantity,
+          unit: cont.unit,
+          location: toFirestoreLocationMap(cont.location),
+          storageCondition: cont.storageCondition,
+          status: cont.status,
+          lotNumber: cont.lotNumber,
+          supplier: cont.supplier,
+          expiryDate: cont.expiryDate,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          createdBy: actor.uid,
+        });
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'seedInitialLabInventory');
+  }
+}
+
+export async function clearAllFirestoreInventory(): Promise<void> {
+  try {
+    const containersSnap = await getDocs(collection(db, 'containers'));
+    for (const d of containersSnap.docs) {
+      await deleteDoc(doc(db, 'containers', d.id));
+    }
+    const productsSnap = await getDocs(collection(db, 'products'));
+    for (const d of productsSnap.docs) {
+      await deleteDoc(doc(db, 'products', d.id));
+    }
+  } catch {
+    // Ignore permission errors if non-admin
   }
 }

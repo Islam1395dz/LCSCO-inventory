@@ -75,36 +75,36 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
   const [purQty, setPurQty] = useState('500');
   const [purUnit, setPurUnit] = useState<ChemicalUnit>(ChemicalUnit.MILLILITER);
   const [purSupplier, setPurSupplier] = useState('Sigma-Aldrich');
-  const [purBox, setPurBox] = useState('FLAM-01');
+  const [purBox, setPurBox] = useState('CAB 1');
   const [purReason, setPurReason] = useState('');
 
-  // Receive delivery state (Room -> Cabinet -> Side -> Shelf -> Position)
+  // Receive delivery state (Cabinet -> Level -> Side -> Position)
   const [receivingPurchaseId, setReceivingPurchaseId] = useState<string | null>(null);
-  const [rcvBottleId, setRcvBottleId] = useState('SOL-105');
+  const [rcvBottleId, setRcvBottleId] = useState('REA-205');
   const [rcvLot, setRcvLot] = useState('LOT-2026-88');
   const [rcvExpiry, setRcvExpiry] = useState('2028-12-31');
-  const [rcvRoom, setRcvRoom] = useState('204');
-  const [rcvBox, setRcvBox] = useState('FLAM-01');
+  const [rcvRoom, setRcvRoom] = useState('Hallway');
+  const [rcvBox, setRcvBox] = useState('CAB 1');
   const [rcvSide, setRcvSide] = useState<'Left' | 'Right'>('Left');
   const [rcvShelf, setRcvShelf] = useState('1');
   const [rcvPosition, setRcvPosition] = useState('01');
 
   // Disposal form state
   const [dispContainerId, setDispContainerId] = useState(
-    containers[0]?.containerId || 'SOL-001'
+    containers[0]?.containerId || 'REA-001'
   );
   const [dispReason, setDispReason] = useState('');
 
   // Adjustment form state
   const [adjContainerId, setAdjContainerId] = useState(
-    containers[0]?.containerId || 'SOL-001'
+    containers[0]?.containerId || 'REA-001'
   );
   const [adjPhysicalQty, setAdjPhysicalQty] = useState('');
   const [adjReason, setAdjReason] = useState('');
 
   // Rupture form state
   const [rupContainerId, setRupContainerId] = useState(
-    containers[0]?.containerId || 'SOL-001'
+    containers[0]?.containerId || 'REA-001'
   );
   const [rupPriority, setRupPriority] = useState<NotificationPriority>(
     NotificationPriority.CRITICAL
@@ -426,7 +426,7 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
               <X className="w-4 h-4" />
             </button>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-[11px] text-slate-600 mb-1">
                 {tr('New Container ID *', 'Nouvel ID Flacon *')}
@@ -463,20 +463,6 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
                 className="w-full px-2.5 py-1.5 font-mono bg-white border border-slate-300 rounded"
               />
             </div>
-            <div>
-              <label className="block text-[11px] text-slate-600 mb-1">
-                {tr('Room *', 'Salle *')}
-              </label>
-              <select
-                value={rcvRoom}
-                onChange={(e) => setRcvRoom(e.target.value)}
-                className="w-full px-2.5 py-1.5 font-mono bg-white border border-slate-300 rounded"
-              >
-                <option value="204">Room 204</option>
-                <option value="308">Room 308</option>
-                <option value="101">Room 101</option>
-              </select>
-            </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
@@ -497,6 +483,22 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
             </div>
             <div>
               <label className="block text-[11px] text-slate-600 mb-1">
+                {tr('Level *', 'Niveau *')}
+              </label>
+              <select
+                value={rcvShelf}
+                onChange={(e) => setRcvShelf(e.target.value)}
+                className="w-full px-2.5 py-1.5 font-mono bg-white border border-slate-300 rounded"
+              >
+                <option value="1">Level 1</option>
+                <option value="2">Level 2</option>
+                <option value="3">Level 3</option>
+                <option value="4">Level 4</option>
+                <option value="5">Level 5</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] text-slate-600 mb-1">
                 {tr('Side *', 'Côté *')}
               </label>
               <select
@@ -504,23 +506,8 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
                 onChange={(e) => setRcvSide(e.target.value as 'Left' | 'Right')}
                 className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded"
               >
-                <option value="Left">{tr('Left side', 'Côté Gauche (Left)')}</option>
-                <option value="Right">{tr('Right side', 'Côté Droit (Right)')}</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] text-slate-600 mb-1">
-                {tr('Shelf *', 'Étagère *')}
-              </label>
-              <select
-                value={rcvShelf}
-                onChange={(e) => setRcvShelf(e.target.value)}
-                className="w-full px-2.5 py-1.5 font-mono bg-white border border-slate-300 rounded"
-              >
-                <option value="1">Shelf 1</option>
-                <option value="2">Shelf 2</option>
-                <option value="3">Shelf 3</option>
-                <option value="4">Shelf 4</option>
+                <option value="Left">{tr('Left side', 'Côté Gauche (Left side)')}</option>
+                <option value="Right">{tr('Right side', 'Côté Droit (Right side)')}</option>
               </select>
             </div>
             <div>

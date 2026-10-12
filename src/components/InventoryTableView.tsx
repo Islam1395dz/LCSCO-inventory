@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Eye,
+  FileUp,
   Filter,
   FlaskConical,
   Layers,
@@ -76,6 +77,8 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
     deleteShelfFromCabinet,
     updateContainerAndProduct,
     deleteContainerById,
+    clearAllInventoryAndCabinets,
+    importRealInventoryBatch,
   } = useInventoryContext();
   const { language } = useLanguage();
   const isFr = language === 'fr';
@@ -94,7 +97,16 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
   const [showFilters, setShowFilters] = useState(false);
 
   // Selected Cabinet in Cabinet View
-  const [selectedCabinetCode, setSelectedCabinetCode] = useState<string>('A');
+  const [selectedCabinetCode, setSelectedCabinetCode] = useState<string>('CAB 1');
+
+  // Real Inventory Importer Modal State
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importFileBase64, setImportFileBase64] = useState<string | null>(null);
+  const [importFileMimeType, setImportFileMimeType] = useState<string>('');
+  const [importFileName, setImportFileName] = useState<string>('');
+  const [importRawText, setImportRawText] = useState<string>('');
+  const [importingInventory, setImportingInventory] = useState(false);
+  const [confirmClearAllOpen, setConfirmClearAllOpen] = useState(false);
 
   // Row dropdown menu state
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -132,12 +144,12 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
   // Physical Location Editor Modal (Add / Edit Cabinet & Shelves)
   const [editingLocationConfig, setEditingLocationConfig] =
     useState<PhysicalLocationConfig | null>(null);
-  const [locFormRoom, setLocFormRoom] = useState('204');
+  const [locFormRoom, setLocFormRoom] = useState('Hallway');
   const [locFormCabinet, setLocFormCabinet] = useState('');
   const [locFormLabel, setLocFormLabel] = useState('');
-  const [locFormStorageClass, setLocFormStorageClass] = useState<string>('Flammable solvent');
-  const [locFormShelves, setLocFormShelves] = useState('1, 2, 3, 4');
-  const [locFormPositions, setLocFormPositions] = useState('01, 02, 03, 04, 05, 06');
+  const [locFormStorageClass, setLocFormStorageClass] = useState<string>('General storage');
+  const [locFormShelves, setLocFormShelves] = useState('1, 2, 3, 4, 5');
+  const [locFormPositions, setLocFormPositions] = useState('01, 02, 03, 04, 05, 06, 07, 08, 09, 10');
 
   // Inline Shelf Rename Modal
   const [shelfEditTarget, setShelfEditTarget] = useState<{
@@ -158,18 +170,18 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
   const [editCasNumber, setEditCasNumber] = useState('');
   const [editFormula, setEditFormula] = useState('');
   const [editMolWeight, setEditMolWeight] = useState('');
-  const [editChemClass, setEditChemClass] = useState('Solvents');
-  const [editStorageClass, setEditStorageClass] = useState('Flammable solvent');
+  const [editChemClass, setEditChemClass] = useState('Salts');
+  const [editStorageClass, setEditStorageClass] = useState('General storage');
   const [editInitialQty, setEditInitialQty] = useState('');
   const [editCurrentQty, setEditCurrentQty] = useState('');
-  const [editUnit, setEditUnit] = useState<ChemicalUnit>(ChemicalUnit.MILLILITER);
+  const [editUnit, setEditUnit] = useState<ChemicalUnit>(ChemicalUnit.GRAM);
   const [editMinStock, setEditMinStock] = useState('');
   const [editReorderLevel, setEditReorderLevel] = useState('');
   const [editLotNumber, setEditLotNumber] = useState('');
   const [editSupplier, setEditSupplier] = useState('');
   const [editExpiryDate, setEditExpiryDate] = useState('');
-  const [editRoom, setEditRoom] = useState('204');
-  const [editCabinet, setEditCabinet] = useState('FLAM-01');
+  const [editRoom, setEditRoom] = useState('Hallway');
+  const [editCabinet, setEditCabinet] = useState('CAB 1');
   const [editSide, setEditSide] = useState<'Left' | 'Right'>('Left');
   const [editShelf, setEditShelf] = useState('1');
   const [editPosition, setEditPosition] = useState('01');
@@ -447,22 +459,108 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
       setLocFormShelves(existing.shelves.join(', '));
       setLocFormPositions(existing.positions.join(', '));
     } else {
+      const nextNum = physicalLocations.length + 1;
+      const defaultCabCode = `CAB ${nextNum}`;
       setEditingLocationConfig({
         id: `CAB-${Date.now().toString(36).toUpperCase()}`,
         room: '204',
-        cabinet: 'CAB-03',
-        cabinetLabel: 'Synthesis Storage Cabinet',
-        storageClassification: 'General synthesis cabinet',
+        cabinet: defaultCabCode,
+        cabinetLabel: `Cabinet ${nextNum}`,
+        storageClassification: 'General storage',
         sides: ['Left', 'Right'],
         shelves: ['1', '2', '3', '4'],
         positions: ['01', '02', '03', '04', '05', '06'],
       });
       setLocFormRoom('204');
-      setLocFormCabinet('CAB-03');
-      setLocFormLabel('Synthesis Storage Cabinet');
-      setLocFormStorageClass('General synthesis cabinet');
+      setLocFormCabinet(defaultCabCode);
+      setLocFormLabel(`Cabinet ${nextNum}`);
+      setLocFormStorageClass('General storage');
       setLocFormShelves('1, 2, 3, 4');
       setLocFormPositions('01, 02, 03, 04, 05, 06');
+    }
+  };
+
+  const handleFileChangeForImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFileName(file.name);
+    setImportFileMimeType(file.type || 'application/pdf');
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resStr = String(reader.result || '');
+      const base64Part = resStr.includes(',') ? resStr.split(',')[1] : resStr;
+      setImportFileBase64(base64Part);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleImportRealInventorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importFileBase64 && !importRawText.trim()) {
+      setToast({
+        type: 'error',
+        text: isFr
+          ? 'Veuillez joindre un fichier (PDF/Image/CSV) ou coller la liste d’inventaire.'
+          : 'Please attach an inventory file (PDF/Image/CSV) or paste the inventory list.',
+      });
+      return;
+    }
+
+    setImportingInventory(true);
+    try {
+      const res = await fetch('/api/inventory/import-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileBase64: importFileBase64,
+          mimeType: importFileMimeType || 'application/pdf',
+          rawText: importRawText,
+          replaceExisting: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'Failed to parse inventory document.');
+      }
+
+      const result = await importRealInventoryBatch({
+        cabinets: data.cabinets || [],
+        reagents: data.reagents || [],
+        replaceExisting: true,
+      });
+
+      setImportModalOpen(false);
+      setImportFileBase64(null);
+      setImportFileName('');
+      setImportRawText('');
+      setToast({
+        type: 'success',
+        text: isFr
+          ? `Inventaire réel importé : ${result.cabinetsCount} armoire(s) et ${result.reagentsCount} réactif(s) créés au format "CAB 1- Level 1- Right side".`
+          : `Real inventory imported: ${result.cabinetsCount} cabinet(s) and ${result.reagentsCount} reagent(s) created with format "CAB 1- Level 1- Right side".`,
+      });
+    } catch (err) {
+      setToast({ type: 'error', text: parseDisplayError(err) });
+    } finally {
+      setImportingInventory(false);
+    }
+  };
+
+  const handleConfirmClearAllInventory = async () => {
+    setSubmitting(true);
+    try {
+      await clearAllInventoryAndCabinets();
+      setConfirmClearAllOpen(false);
+      setToast({
+        type: 'success',
+        text: isFr
+          ? 'Tous les réactifs et toutes les armoires ont été supprimés.'
+          : 'All reagents and cabinets have been deleted.',
+      });
+    } catch (err) {
+      setToast({ type: 'error', text: parseDisplayError(err) });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -649,11 +747,11 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
     return (
       physicalLocations.find((p) => p.cabinet === selectedCabinetCode) ||
       physicalLocations[0] || {
-        id: 'CAB-FLAM-01',
+        id: 'CAB-1',
         room: '204',
-        cabinet: 'FLAM-01',
-        cabinetLabel: 'Flammable Cabinet',
-        storageClassification: 'Flammable solvent',
+        cabinet: 'CAB 1',
+        cabinetLabel: 'Cabinet 1',
+        storageClassification: 'General storage',
         sides: ['Left', 'Right'],
         shelves: ['1', '2', '3', '4'],
         positions: ['01', '02', '03', '04', '05', '06'],
@@ -667,11 +765,11 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
         title={isFr ? 'Réactifs & Emplacements Physiques' : 'Reagents & Physical Locations'}
         subtitle={
           isFr
-            ? `${containers.length} contenants répartis par Salle → Armoire → Côté (Gauche/Droit) → Étagère → Position.`
-            : `${containers.length} containers organized by Room → Cabinet → Side (Left/Right) → Shelf → Position.`
+            ? `${containers.length} réactif(s) et ${physicalLocations.length} armoire(s) — Format : CAB 1- Level 1- Right side`
+            : `${containers.length} reagent(s) and ${physicalLocations.length} cabinet(s) — Format: CAB 1- Level 1- Right side`
         }
         actions={
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             {/* View Mode Switcher */}
             <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
               <button
@@ -693,17 +791,38 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span>{isFr ? 'Étagères G/D' : 'Cabinet Shelves'}</span>
+                <span>{isFr ? 'Armoires & Niveaux' : 'Cabinets & Levels'}</span>
               </button>
             </div>
 
-            {canManageLocations && viewMode === 'cabinets' && (
+            {canPerform(PermissionAction.ADD_NEW_CHEMICAL) && (
+              <Button
+                variant="secondary"
+                icon={<FileUp className="w-4 h-4 text-teal-700" />}
+                onClick={() => setImportModalOpen(true)}
+              >
+                {isFr ? 'Importer l’inventaire réel (PDF/Liste)' : 'Import Real Inventory (PDF/List)'}
+              </Button>
+            )}
+
+            {canDeleteItems && (containers.length > 0 || physicalLocations.length > 0) && (
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<Trash2 className="w-3.5 h-3.5" />}
+                onClick={() => setConfirmClearAllOpen(true)}
+              >
+                {isFr ? 'Tout supprimer' : 'Delete All'}
+              </Button>
+            )}
+
+            {canManageLocations && (
               <Button
                 variant="secondary"
                 icon={<Settings2 className="w-4 h-4" />}
                 onClick={() => openLocationEditor()}
               >
-                {isFr ? 'Nouvelle armoire' : 'Add cabinet location'}
+                {isFr ? 'Nouvelle armoire' : 'Add Cabinet'}
               </Button>
             )}
 
@@ -713,7 +832,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                 icon={<Plus className="w-4 h-4" />}
                 onClick={onOpenAddModal}
               >
-                {isFr ? 'Ajouter un réactif' : 'Add reagent'}
+                {isFr ? 'Ajouter un réactif' : 'Add Reagent'}
               </Button>
             )}
           </div>
@@ -754,8 +873,8 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={
                 isFr
-                  ? 'Rechercher par nom, CAS, formule, salle, armoire (FLAM-01), code (R204-FLAM01-L-S01-P01)...'
-                  : 'Search by chemical name, CAS, formula, room, cabinet (FLAM-01), or code (R204-FLAM01-L-S01-P01)...'
+                  ? 'Rechercher par nom, CAS, armoire (CAB 1, CAB 2, CAB 3, CAB 4), ou code (CAB 1- Level 1- Left side)...'
+                  : 'Search by chemical name, CAS, cabinet (CAB 1, CAB 2, CAB 3, CAB 4), or code (CAB 1- Level 1- Left side)...'
               }
               className="w-full pl-9 pr-4 py-2 text-sm bg-slate-50/60 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:border-teal-600 transition-colors"
             />
@@ -884,11 +1003,45 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
           {filteredContainers.length === 0 ? (
             <EmptyState
               icon={<FlaskConical className="w-6 h-6" />}
-              title={isFr ? 'Aucun réactif trouvé' : 'No matching reagents found'}
+              title={
+                containers.length === 0
+                  ? isFr
+                    ? 'Inventaire vide — Prêt pour l’inventaire réel'
+                    : 'Inventory Cleared — Ready for Real Laboratory Inventory'
+                  : isFr
+                  ? 'Aucun réactif trouvé'
+                  : 'No matching reagents found'
+              }
               description={
-                isFr
+                containers.length === 0
+                  ? isFr
+                    ? 'Tous les anciens réactifs et armoires ont été supprimés. Importez votre fichier PDF/liste d’inventaire réel ou créez vos armoires au format "CAB 1- Level 1- Right side".'
+                    : 'All previous reagents and cabinets have been deleted. Import your real inventory PDF/list or create cabinets and reagents using the format "CAB 1- Level 1- Right side".'
+                  : isFr
                   ? 'Modifiez vos critères de recherche ou réinitialisez les filtres.'
                   : 'Try adjusting your search query or clearing active filters.'
+              }
+              action={
+                containers.length === 0 && canPerform(PermissionAction.ADD_NEW_CHEMICAL) ? (
+                  <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                    <Button
+                      variant="primary"
+                      icon={<FileUp className="w-4 h-4" />}
+                      onClick={() => setImportModalOpen(true)}
+                    >
+                      {isFr
+                        ? 'Importer l’inventaire réel (PDF / Liste)'
+                        : 'Import Real Inventory (PDF / List)'}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      icon={<Settings2 className="w-4 h-4" />}
+                      onClick={() => openLocationEditor()}
+                    >
+                      {isFr ? 'Créer une armoire (CAB 1)' : 'Create Cabinet (CAB 1)'}
+                    </Button>
+                  </div>
+                ) : undefined
               }
             />
           ) : (
@@ -901,8 +1054,8 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                     <th className="py-3 px-4 text-right">{isFr ? 'Quantité' : 'Quantity'}</th>
                     <th className="py-3 px-4">
                       {isFr
-                        ? 'Emplacement Physique (Salle → Armoire → Côté → Étagère → Pos)'
-                        : 'Physical Location (Room → Cabinet → Side → Shelf → Pos)'}
+                        ? 'Emplacement Physique (CAB X- Level Y- Side)'
+                        : 'Physical Location (CAB X- Level Y- Side)'}
                     </th>
                     <th className="py-3 px-4">{isFr ? 'Statut' : 'Status'}</th>
                     <th className="py-3 px-4 text-right">{isFr ? 'Actions' : 'Actions'}</th>
@@ -951,22 +1104,21 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                         </td>
 
                         <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-900">
+                          <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-900">
                             <MapPin className="w-3.5 h-3.5 text-teal-600 shrink-0" />
                             <span>
-                              Room {loc.room} → {loc.cabinet} →{' '}
+                              {loc.cabinet}- Level {loc.shelf}-{' '}
                               <span
                                 className={
                                   loc.side === 'Left' ? 'text-teal-700' : 'text-indigo-700'
                                 }
                               >
-                                {loc.side}
-                              </span>{' '}
-                              → Shelf {loc.shelf} → Pos {loc.position}
+                                {loc.side} side
+                              </span>
                             </span>
                           </div>
                           <div className="text-[11px] text-slate-500 font-mono pl-5 mt-0.5">
-                            {loc.code} · {loc.cabinetLabel}
+                            {loc.cabinetLabel} · Pos {loc.position}
                           </div>
                         </td>
 
@@ -1149,7 +1301,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
         </div>
       )}
 
-      {/* VIEW MODE 2: Physical Laboratory Layout (Room -> Cabinet -> Left & Right Sides -> Shelves -> Positions) */}
+      {/* VIEW MODE 2: Physical Laboratory Layout (Cabinet -> Level -> Left/Right Side -> Positions) */}
       {viewMode === 'cabinets' && (
         <div className="space-y-6">
           {/* Cabinet Selector Pills */}
@@ -1163,8 +1315,8 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                 </h2>
                 <p className="text-xs text-slate-500">
                   {isFr
-                    ? 'Hiérarchie physique : Salle → Armoire → Côté (Gauche / Droit) → Étagère → Position'
-                    : 'Physical hierarchy: Room → Cabinet → Side (Left / Right) → Shelf → Position'}
+                    ? 'Format officiel de l’inventaire PDF : CAB X- Level Y- Left/Right side'
+                    : 'Official PDF Inventory Format: CAB X- Level Y- Left/Right side'}
                 </p>
               </div>
               {canManageLocations && (
@@ -1182,7 +1334,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                     icon={<Plus className="w-3.5 h-3.5" />}
                     onClick={() => openLocationEditor()}
                   >
-                    {isFr ? 'Créer un emplacement' : 'New cabinet'}
+                    {isFr ? 'Créer une armoire' : 'New cabinet'}
                   </Button>
                 </div>
               )}
@@ -1207,7 +1359,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                   >
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold">
-                        Room {locCfg.room} · {locCfg.cabinet}
+                        {locCfg.cabinet}
                       </span>
                       <Badge variant={isSelected ? 'teal' : 'neutral'}>{countInCab}</Badge>
                     </div>
@@ -1226,15 +1378,14 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-base font-bold text-slate-900">
-                    Room {activeCabinetConfig.room} → Cabinet {activeCabinetConfig.cabinet} —{' '}
-                    {activeCabinetConfig.cabinetLabel}
+                    {activeCabinetConfig.cabinet} — {activeCabinetConfig.cabinetLabel}
                   </span>
                   <Badge variant="teal">{activeCabinetConfig.storageClassification}</Badge>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {isFr
-                    ? `Côté Gauche (${activeCabinetConfig.cabinet} → Left) et Côté Droit (${activeCabinetConfig.cabinet} → Right) sont séparés physiquement.`
-                    : `Left Side (${activeCabinetConfig.cabinet} → Left) and Right Side (${activeCabinetConfig.cabinet} → Right) are separate physical compartments.`}
+                    ? `Côté Gauche (${activeCabinetConfig.cabinet}- Level X- Left side) et Côté Droit (${activeCabinetConfig.cabinet}- Level X- Right side) sont séparés physiquement.`
+                    : `Left Side (${activeCabinetConfig.cabinet}- Level X- Left side) and Right Side (${activeCabinetConfig.cabinet}- Level X- Right side) are separate physical compartments.`}
                 </p>
               </div>
 
@@ -1249,7 +1400,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                       setNewAddedShelfName(String(activeCabinetConfig.shelves.length + 1));
                     }}
                   >
-                    {isFr ? 'Ajouter une étagère' : 'Add shelf'}
+                    {isFr ? 'Ajouter un niveau' : 'Add level'}
                   </Button>
                   <Button
                     variant="secondary"
@@ -1280,17 +1431,16 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                     <div className="flex items-center justify-between border-b border-slate-200 pb-3">
                       <div>
                         <h3 className="text-sm font-bold text-slate-900">
-                          {activeCabinetConfig.cabinet} → {sideName} Side
+                          {activeCabinetConfig.cabinet} — {sideName} side
                         </h3>
                         <p className="text-xs text-slate-500">
-                          Room {activeCabinetConfig.room} ·{' '}
                           {sideName === 'Left'
                             ? isFr
-                              ? 'Compartiment Gauche'
-                              : 'Left Compartment'
+                              ? 'Compartiment Gauche (Left side)'
+                              : 'Left side compartment'
                             : isFr
-                            ? 'Compartiment Droit'
-                            : 'Right Compartment'}
+                            ? 'Compartiment Droit (Right side)'
+                            : 'Right side compartment'}
                         </p>
                       </div>
                       <Badge variant={sideName === 'Left' ? 'teal' : 'info'}>
@@ -1312,7 +1462,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                             <div className="flex items-center justify-between mb-2.5">
                               <div className="flex items-center gap-2">
                                 <span className="text-xs font-mono font-bold text-slate-800">
-                                  {activeCabinetConfig.cabinet} → {sideName} → Shelf {shelfNum}
+                                  {activeCabinetConfig.cabinet}- Level {shelfNum}- {sideName} side
                                 </span>
                                 {canManageLocations && (
                                   <div className="inline-flex items-center gap-1">
@@ -1326,7 +1476,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                                         });
                                         setNewShelfName(shelfNum);
                                       }}
-                                      title={isFr ? 'Renommer cette étagère' : 'Rename shelf'}
+                                      title={isFr ? 'Renommer ce niveau' : 'Rename level'}
                                       className="p-1 rounded text-slate-400 hover:text-teal-700 hover:bg-slate-100 transition-colors"
                                     >
                                       <Pencil className="w-3 h-3" />
@@ -1343,8 +1493,8 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                                             setToast({
                                               type: 'success',
                                               text: isFr
-                                                ? `Étagère "${shelfNum}" supprimée de ${activeCabinetConfig.cabinet}.`
-                                                : `Shelf "${shelfNum}" removed from ${activeCabinetConfig.cabinet}.`,
+                                                ? `Niveau "${shelfNum}" supprimé de ${activeCabinetConfig.cabinet}.`
+                                                : `Level "${shelfNum}" removed from ${activeCabinetConfig.cabinet}.`,
                                             });
                                           } catch (err) {
                                             setToast({
@@ -1353,7 +1503,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                                             });
                                           }
                                         }}
-                                        title={isFr ? 'Supprimer cette étagère' : 'Delete shelf'}
+                                        title={isFr ? 'Supprimer ce niveau' : 'Delete level'}
                                         className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
                                       >
                                         <Trash2 className="w-3 h-3" />
@@ -1362,11 +1512,8 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                                   </div>
                                 )}
                               </div>
-                              <span className="text-[11px] text-slate-400 font-mono">
-                                R{activeCabinetConfig.room}-
-                                {activeCabinetConfig.cabinet.replace(/[^a-zA-Z0-9]/g, '')}-
-                                {sideName === 'Right' ? 'R' : 'L'}-S
-                                {shelfNum.padStart(2, '0')}
+                              <span className="text-[11px] text-teal-700 font-mono font-semibold">
+                                {activeCabinetConfig.cabinet}- Level {shelfNum}- {sideName} side
                               </span>
                             </div>
 
@@ -1669,57 +1816,43 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
         onClose={() => setEditingLocationConfig(null)}
         title={
           isFr
-            ? 'Configurer un emplacement physique (Salle → Armoire → Côté → Étagères)'
-            : 'Configure Physical Location (Room → Cabinet → Side → Shelves)'
+            ? 'Configurer une armoire de stockage (CAB X → Niveaux → Côté Gauche/Droit)'
+            : 'Configure Storage Cabinet (CAB X → Levels → Left/Right side)'
         }
         subtitle={
           isFr
-            ? 'Chaque armoire comporte un Côté Gauche (Left) et un Côté Droit (Right) distincts.'
-            : 'Every cabinet automatically provides separate Left and Right physical compartments.'
+            ? 'Chaque armoire comporte un Côté Gauche (Left side) et un Côté Droit (Right side) distincts.'
+            : 'Every cabinet automatically provides separate Left side and Right side physical compartments.'
         }
       >
         <form onSubmit={handleSaveLocationConfig} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">
-                {isFr ? 'Salle (Room) *' : 'Room *'}
-              </label>
-              <input
-                type="text"
-                required
-                value={locFormRoom}
-                onChange={(e) => setLocFormRoom(e.target.value)}
-                placeholder="e.g. 204"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                {isFr ? 'Code Armoire (Cabinet) *' : 'Cabinet Code *'}
+                {isFr ? 'Code Armoire (ex: CAB 1) *' : 'Cabinet Code (e.g. CAB 1) *'}
               </label>
               <input
                 type="text"
                 required
                 value={locFormCabinet}
                 onChange={(e) => setLocFormCabinet(e.target.value.toUpperCase())}
-                placeholder="e.g. FLAM-01, CAB-02"
+                placeholder="e.g. CAB 1, CAB 2, CAB 3, CAB 4"
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono"
               />
             </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              {isFr ? 'Nom descriptif de l’armoire *' : 'Cabinet Descriptive Name *'}
-            </label>
-            <input
-              type="text"
-              required
-              value={locFormLabel}
-              onChange={(e) => setLocFormLabel(e.target.value)}
-              placeholder="e.g. Flammable Cabinet"
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-            />
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">
+                {isFr ? 'Nom descriptif de l’armoire *' : 'Cabinet Descriptive Name *'}
+              </label>
+              <input
+                type="text"
+                required
+                value={locFormLabel}
+                onChange={(e) => setLocFormLabel(e.target.value)}
+                placeholder="e.g. Cabinet 1 - Hallway (Salts Cabinet)"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+              />
+            </div>
           </div>
 
           <div>
@@ -2230,25 +2363,13 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
           <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
             <div className="text-xs font-semibold text-slate-800">
               {isFr
-                ? 'Emplacement Physique (Salle → Armoire → Côté → Étagère → Position)'
-                : 'Physical Location (Room → Cabinet → Side → Shelf → Position)'}
+                ? 'Emplacement Physique (CAB X- Level Y- Left/Right side)'
+                : 'Physical Location (CAB X- Level Y- Left/Right side)'}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <div>
                 <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Salle' : 'Room'}
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editRoom}
-                  onChange={(e) => setEditRoom(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-mono"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Armoire' : 'Cabinet'}
+                  {isFr ? 'Armoire (Cabinet)' : 'Cabinet'}
                 </label>
                 <select
                   value={editCabinet}
@@ -2264,20 +2385,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
               </div>
               <div>
                 <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Côté' : 'Side'}
-                </label>
-                <select
-                  value={editSide}
-                  onChange={(e) => setEditSide(e.target.value as 'Left' | 'Right')}
-                  className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-medium"
-                >
-                  <option value="Left">Left</option>
-                  <option value="Right">Right</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                  {isFr ? 'Étagère' : 'Shelf'}
+                  {isFr ? 'Niveau (Level)' : 'Level'}
                 </label>
                 <select
                   value={editShelf}
@@ -2290,12 +2398,26 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
                       '2',
                       '3',
                       '4',
+                      '5',
                     ]
                   ).map((sh) => (
                     <option key={sh} value={sh}>
-                      Shelf {sh}
+                      Level {sh}
                     </option>
                   ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                  {isFr ? 'Côté (Side)' : 'Side'}
+                </label>
+                <select
+                  value={editSide}
+                  onChange={(e) => setEditSide(e.target.value as 'Left' | 'Right')}
+                  className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-medium"
+                >
+                  <option value="Left">Left side</option>
+                  <option value="Right">Right side</option>
                 </select>
               </div>
               <div>
@@ -2404,6 +2526,128 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
             </Button>
           </div>
         </div>
+      </Modal>
+
+      {/* Modal: Confirm Delete All Reagents & Cabinets */}
+      <Modal
+        open={confirmClearAllOpen}
+        onClose={() => setConfirmClearAllOpen(false)}
+        title={
+          isFr
+            ? 'Supprimer tous les réactifs et toutes les armoires ?'
+            : 'Delete All Reagents & Cabinets?'
+        }
+        subtitle={
+          isFr
+            ? 'Cette action vide intégralement les réactifs et armoires.'
+            : 'This action wipes all existing reagents and cabinets so you can start fresh.'
+        }
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            {isFr
+              ? 'Confirmez-vous la suppression de tous les réactifs et de toutes les armoires de stockage ?'
+              : 'Are you sure you want to delete all reagents and all storage cabinets?'}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setConfirmClearAllOpen(false)}>
+              {isFr ? 'Annuler' : 'Cancel'}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={submitting}
+              onClick={handleConfirmClearAllInventory}
+            >
+              {isFr ? 'Tout supprimer' : 'Delete All'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal: Import Real Inventory (PDF / Image / CSV / Text) */}
+      <Modal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        title={
+          isFr
+            ? 'Importer l’inventaire réel du laboratoire'
+            : 'Import Real Laboratory Inventory'
+        }
+        subtitle={
+          isFr
+            ? 'Crée automatiquement les armoires et attache chaque réactif avec son armoire, son niveau et son côté (ex: CAB 1- Level 1- Right side).'
+            : 'Automatically creates the appropriate cabinets and attaches each reagent with its cabinet, level, and side (e.g. CAB 1- Level 1- Right side).'
+        }
+        maxWidth="max-w-2xl"
+      >
+        <form onSubmit={handleImportRealInventorySubmit} className="space-y-4">
+          <div className="rounded-xl border border-dashed border-teal-300 bg-teal-50/40 p-4 space-y-2">
+            <label className="block text-xs font-semibold text-slate-800">
+              {isFr
+                ? '1. Joindre le fichier d’inventaire (PDF, Image, CSV, TXT)'
+                : '1. Attach Inventory File (PDF, Image, CSV, TXT)'}
+            </label>
+            <input
+              type="file"
+              accept=".pdf,image/*,.csv,.txt"
+              onChange={handleFileChangeForImport}
+              className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3.5 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-teal-700 file:text-white hover:file:bg-teal-800 cursor-pointer"
+            />
+            {importFileName && (
+              <div className="text-xs text-teal-800 font-mono">
+                {isFr ? 'Fichier sélectionné :' : 'Selected file:'} {importFileName}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-800 mb-1">
+              {isFr
+                ? '2. Ou coller la liste d’inventaire (Optionnel)'
+                : '2. Or Paste Inventory List / Table Text (Optional)'}
+            </label>
+            <textarea
+              rows={5}
+              value={importRawText}
+              onChange={(e) => setImportRawText(e.target.value)}
+              placeholder={
+                isFr
+                  ? 'Exemple :\nCAB 1 - Level 1 - Right side : Ethanol 2500 mL, Acetone 1000 mL\nCAB 1 - Level 2 - Left side : Methanol 2500 mL...'
+                  : 'Example:\nCAB 1 - Level 1 - Right side: Ethanol 2500 mL, Acetone 1000 mL\nCAB 1 - Level 2 - Left side: Methanol 2500 mL...'
+              }
+              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg font-mono"
+            />
+          </div>
+
+          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-xs text-slate-600 flex items-center justify-between">
+            <span>
+              {isFr ? 'Format du code généré :' : 'Generated location code format:'}
+            </span>
+            <span className="font-mono font-bold text-teal-800">
+              CAB 1- Level 1- Right side
+            </span>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setImportModalOpen(false)}
+            >
+              {isFr ? 'Annuler' : 'Cancel'}
+            </Button>
+            <Button type="submit" variant="primary" disabled={importingInventory}>
+              {importingInventory
+                ? isFr
+                  ? 'Analyse et création en cours...'
+                  : 'Analyzing & Creating Cabinets...'
+                : isFr
+                ? 'Créer les armoires et importer les réactifs'
+                : 'Create Cabinets & Import Reagents'}
+            </Button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

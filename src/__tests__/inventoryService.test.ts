@@ -252,11 +252,12 @@ describe('Inventory Domain Logic & Transaction Unit Tests', () => {
     const loc = buildStorageLocation({
       building: 'CHM',
       room: '304',
-      unit: 'FLAM-1',
-      shelf: 'S2',
+      unit: 'CAB 1',
+      side: 'Right',
+      shelf: '2',
       position: 'P04',
     });
-    expect(loc.code).toBe('CHM-304-FLAM-1-S2-P04');
+    expect(loc.code).toBe('CAB 1- Level 2- Right side');
   });
 
   it('9. Enforces the 4-role permission matrix (Director, Professor, Technician, PhD Student) at action level', () => {
