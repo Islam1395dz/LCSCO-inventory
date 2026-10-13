@@ -715,6 +715,8 @@ export async function createLabMemberProfile(input: {
   role: UserRole;
   laboratoryIds: string[];
   status?: UserStatus;
+  password?: string;
+  mustChangePassword?: boolean;
   actor: TransactionActor;
 }): Promise<string> {
   if (input.actor.role !== UserRole.ADMIN) {
@@ -725,7 +727,7 @@ export async function createLabMemberProfile(input: {
     ? sanitizeId(input.uid)
     : `LCSCO-${Date.now().toString(36).toUpperCase()}`;
 
-  const payload = {
+  const payload: any = {
     uid,
     fullName: input.fullName.trim().slice(0, SCHEMA_CONSTRAINTS.FULL_NAME_MAX_LENGTH),
     email: input.email.trim().slice(0, SCHEMA_CONSTRAINTS.EMAIL_MAX_LENGTH),
@@ -736,6 +738,8 @@ export async function createLabMemberProfile(input: {
     createdAt: serverTimestamp(),
     lastLogin: serverTimestamp(),
   };
+  if (input.password) payload.password = input.password;
+  if (input.mustChangePassword !== undefined) payload.mustChangePassword = input.mustChangePassword;
 
   try {
     await setDoc(doc(db, 'users', uid), payload);

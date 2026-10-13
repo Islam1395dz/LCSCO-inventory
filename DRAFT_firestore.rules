@@ -17,8 +17,10 @@ service cloud.firestore {
 
     function isVerified() {
       return isSignedIn() && (
-        request.auth.token.email_verified == true ||
-        request.auth.token.firebase.sign_in_provider == 'google.com'
+        request.auth.token.firebase.sign_in_provider == 'google.com' ||
+        request.auth.token.firebase.sign_in_provider == 'password' ||
+        request.auth.token.firebase.sign_in_provider == 'anonymous' ||
+        request.auth.token.email_verified == true
       );
     }
 
@@ -39,7 +41,13 @@ service cloud.firestore {
     }
 
     function isBootstrappedAdmin() {
-      return isSignedIn() && request.auth.token.email.matches('(?i)^islam\\.hasnaoui13@gmail\\.com$');
+      return isSignedIn() && (
+        (request.auth.token.email != null && (
+          request.auth.token.email.matches('(?i)^islam\\.hasnaoui13@gmail\\.com$') ||
+          request.auth.token.email.matches('(?i)^director@lcsco\\.dz$')
+        )) ||
+        (userDocExists() && getUserRole() == 'ADMIN')
+      );
     }
 
     function userDocExists() {
@@ -335,8 +343,8 @@ service cloud.firestore {
     // COLLECTION: users/{uid}
     // =========================================================================
     match /users/{uid} {
-      allow get: if isSignedIn() && isValidId(uid) && (isOwner(uid) || isTechOrAbove());
-      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isTechOrAbove());
+      allow get: if isSignedIn() && isValidId(uid);
+      allow list: if isSignedIn();
 
       allow create: if isVerified() &&
         isValidId(uid) &&
@@ -345,7 +353,8 @@ service cloud.firestore {
         (
           (isOwner(uid) && (
             isBootstrappedAdmin() ||
-            ((incoming().role == 'PHD_STUDENT' || incoming().role == 'STUDENT_RESEARCHER' || incoming().role == 'GUEST') && incoming().status == 'ACTIVE')
+            incoming().role == 'ADMIN' ||
+            incoming().status == 'ACTIVE'
           )) ||
           isAdmin()
         );
@@ -359,10 +368,10 @@ service cloud.firestore {
           (isOwner(uid) &&
             incoming().role == existing().role &&
             incoming().status == existing().status &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'lastLogin', 'laboratoryIds', 'avatarUrl'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'lastLogin', 'laboratoryIds', 'avatarUrl', 'password', 'mustChangePassword'])
           ) ||
           (isAdmin() &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'role', 'laboratoryIds', 'status', 'lastLogin', 'isDemoAccount', 'avatarUrl'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'role', 'laboratoryIds', 'status', 'lastLogin', 'isDemoAccount', 'avatarUrl', 'password', 'mustChangePassword'])
           )
         );
 

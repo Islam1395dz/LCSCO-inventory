@@ -22,6 +22,7 @@ import { Button, PageHeader } from './DesignSystem';
 export const UserManagementView: React.FC = () => {
   const {
     profile,
+    firebaseUser,
     isPreviewMode,
     updatePreviewState,
     products,
@@ -73,40 +74,60 @@ export const UserManagementView: React.FC = () => {
       const tempPassword = newMemberPassword.trim() || 'LCSCO-2026';
       const generatedUid = `LCSCO-${Date.now().toString(36).toUpperCase()}`;
 
-      if (isPreviewMode) {
-        const createdUser: UserProfile = {
+      let createdUid = generatedUid;
+      if (firebaseUser) {
+        createdUid = await createLabMemberProfile({
           uid: generatedUid,
           fullName: newMemberName.trim(),
           email: newMemberEmail.trim(),
+          role: newMemberRole,
+          laboratoryIds: ['LCSCO'],
           password: tempPassword,
           mustChangePassword: true,
-          role: newMemberRole,
-          laboratoryIds: ['LCSCO'],
           status: UserStatus.ACTIVE,
-          createdAt: new Date().toISOString(),
-          lastLogin: new Date().toISOString(),
-        };
-        localStorage.setItem(`lcsco_pass_${generatedUid}`, tempPassword);
-        localStorage.setItem(`lcsco_must_change_pass_${generatedUid}`, 'true');
-        updatePreviewState({
-          users: [...allUsers, createdUser],
-        });
-      } else {
-        const createdUid = await createLabMemberProfile({
-          uid: generatedUid,
-          fullName: newMemberName,
-          email: newMemberEmail,
-          role: newMemberRole,
-          laboratoryIds: ['LCSCO'],
           actor: {
             uid: profile.uid,
             fullName: profile.fullName,
             role: profile.role,
           },
         });
-        localStorage.setItem(`lcsco_pass_${createdUid}`, tempPassword);
-        localStorage.setItem(`lcsco_must_change_pass_${createdUid}`, 'true');
+      } else {
+        try {
+          createdUid = await createLabMemberProfile({
+            uid: generatedUid,
+            fullName: newMemberName.trim(),
+            email: newMemberEmail.trim(),
+            role: newMemberRole,
+            laboratoryIds: ['LCSCO'],
+            password: tempPassword,
+            mustChangePassword: true,
+            status: UserStatus.ACTIVE,
+            actor: {
+              uid: profile.uid,
+              fullName: profile.fullName,
+              role: profile.role,
+            },
+          });
+        } catch {
+          const createdUser: UserProfile = {
+            uid: generatedUid,
+            fullName: newMemberName.trim(),
+            email: newMemberEmail.trim(),
+            password: tempPassword,
+            mustChangePassword: true,
+            role: newMemberRole,
+            laboratoryIds: ['LCSCO'],
+            status: UserStatus.ACTIVE,
+            createdAt: new Date().toISOString(),
+            lastLogin: new Date().toISOString(),
+          };
+          updatePreviewState({
+            users: [...allUsers, createdUser],
+          });
+        }
       }
+      localStorage.setItem(`lcsco_pass_${createdUid}`, tempPassword);
+      localStorage.setItem(`lcsco_must_change_pass_${createdUid}`, 'true');
 
       setFeedback({
         type: 'success',
@@ -138,11 +159,7 @@ export const UserManagementView: React.FC = () => {
         );
       }
 
-      if (isPreviewMode) {
-        updatePreviewState({
-          users: allUsers.filter((u) => u.uid !== targetUser.uid),
-        });
-      } else {
+      try {
         await deleteLabMemberProfile({
           targetUid: targetUser.uid,
           actor: {
@@ -151,6 +168,14 @@ export const UserManagementView: React.FC = () => {
             role: profile.role,
           },
         });
+      } catch (firestoreErr) {
+        if (!firebaseUser) {
+          updatePreviewState({
+            users: allUsers.filter((u) => u.uid !== targetUser.uid),
+          });
+        } else {
+          throw firestoreErr;
+        }
       }
 
       setFeedback({
@@ -172,20 +197,24 @@ export const UserManagementView: React.FC = () => {
   ) => {
     setFeedback(null);
     try {
-      if (isPreviewMode) {
-        updatePreviewState({
-          users: allUsers.map((u) =>
-            u.uid === targetUid ? { ...u, role: newRole, laboratoryIds: ['LCSCO'] } : u
-          ),
-          currentProfile: profile?.uid === targetUid ? { role: newRole } : undefined,
-        });
-      } else {
+      try {
         await updateUserPermissions({
           targetUid,
           role: newRole,
           status: currentStatus,
           laboratoryIds: ['LCSCO'],
         });
+      } catch (firestoreErr) {
+        if (!firebaseUser) {
+          updatePreviewState({
+            users: allUsers.map((u) =>
+              u.uid === targetUid ? { ...u, role: newRole, laboratoryIds: ['LCSCO'] } : u
+            ),
+            currentProfile: profile?.uid === targetUid ? { role: newRole } : undefined,
+          });
+        } else {
+          throw firestoreErr;
+        }
       }
       setFeedback({
         type: 'success',
@@ -215,19 +244,23 @@ export const UserManagementView: React.FC = () => {
           ? UserStatus.ACTIVE
           : UserStatus.DEACTIVATED;
 
-      if (isPreviewMode) {
-        updatePreviewState({
-          users: allUsers.map((u) =>
-            u.uid === targetUser.uid ? { ...u, status: nextStatus } : u
-          ),
-        });
-      } else {
+      try {
         await updateUserPermissions({
           targetUid: targetUser.uid,
           role: targetUser.role,
           status: nextStatus,
-          laboratoryIds: targetUser.laboratoryIds,
+          laboratoryIds: targetUser.laboratoryIds || ['LCSCO'],
         });
+      } catch (firestoreErr) {
+        if (!firebaseUser) {
+          updatePreviewState({
+            users: allUsers.map((u) =>
+              u.uid === targetUser.uid ? { ...u, status: nextStatus } : u
+            ),
+          });
+        } else {
+          throw firestoreErr;
+        }
       }
       setFeedback({
         type: 'success',
