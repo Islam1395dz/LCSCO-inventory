@@ -17,10 +17,25 @@ export const googleProvider = new GoogleAuthProvider();
 export async function testFirestoreConnection(): Promise<void> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
+    console.info('Firestore connection test successful');
+  } catch (error: any) {
+    const msg = String(error?.message || error?.code || '');
+    if (msg.includes('client is offline') || msg.includes('offline')) {
+      console.warn('Firestore connection test skipped: client appears offline');
+      return;
     }
+    // With strict Firestore rules, the test path is not readable - this is expected
+    if (
+      msg.includes('permission') ||
+      msg.includes('insufficient') ||
+      msg.includes('PERMISSION_DENIED') ||
+      msg.includes('not found') ||
+      msg.includes('NOT_FOUND')
+    ) {
+      console.debug('[Firestore] Connectivity ping denied by rules (expected)');
+      return;
+    }
+    console.error('Firestore connection test failed:', error);
   }
 }
 
