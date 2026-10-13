@@ -665,7 +665,7 @@ export const UserGuideView: React.FC = () => {
             </span>
           </div>
           <ul className="space-y-2 text-xs text-slate-700">
-            {myManual.allowedActions.map((act, i) => (
+            {myManual.allowedActions.map((act: string, i: number) => (
               <li key={i} className="flex items-start gap-2">
                 <span className="font-bold text-[#1B8A2A] mt-0.5">✓</span>
                 <span>{act}</span>
@@ -685,7 +685,7 @@ export const UserGuideView: React.FC = () => {
             </span>
           </div>
           <ul className="space-y-2 text-xs text-slate-700">
-            {myManual.restrictedActions.map((res, i) => (
+            {myManual.restrictedActions.map((res: string, i: number) => (
               <li key={i} className="flex items-start gap-2">
                 <span className="font-bold text-rose-600 mt-0.5">✖</span>
                 <span>{res}</span>
@@ -715,7 +715,7 @@ export const UserGuideView: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {myManual.stepByStepWorkflows.map((wf, index) => (
+          {myManual.stepByStepWorkflows.map((wf: any, index: number) => (
             <div
               key={wf.stepNumber}
               className="bg-white border border-slate-200 rounded-md p-5 flex flex-col justify-between space-y-4"
@@ -737,7 +737,7 @@ export const UserGuideView: React.FC = () => {
 
                 {/* Clear Numbered Sub-steps */}
                 <ol className="space-y-2 text-xs text-slate-700 pt-1">
-                  {wf.instructions.map((step, i) => (
+                  {wf.instructions.map((step: any, i: number) => (
                     <li key={i} className="flex items-start gap-2.5">
                       <span className="h-5 w-5 rounded-full bg-slate-100 border border-slate-300 text-slate-800 font-mono text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5">
                         {i + 1}

@@ -9,24 +9,36 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
+  writeBatch,
 } from 'firebase/firestore';
 import { db, handleFirestoreError } from '../firebase';
 import {
   INITIAL_DEMO_CONTAINERS,
   INITIAL_DEMO_PRODUCTS,
+  INITIAL_PHYSICAL_LOCATIONS,
 } from '../data/demoInventoryData';
 import {
+  AppNotification,
   ChemicalContainer,
   ChemicalUnit,
   ContainerStatus,
+  DisposalWorkflowItem,
+  InventoryTransaction,
+  LabFloorPlanConfig,
   Laboratory,
   OperationType,
+  PhysicalLocationConfig,
   Product,
+  PurchaseWorkflowItem,
   SCHEMA_CONSTRAINTS,
+  StockAdjustmentRequest,
+  StockRuptureRequest,
   StorageLocation,
   TransactionType,
   UserRole,
@@ -433,6 +445,8 @@ export async function correctContainerInventory(params: {
   }
 }
 
+export const correctStockDiscrepancy = correctContainerInventory;
+
 /**
  * Location Transfer (`runTransaction`)
  */
@@ -718,6 +732,7 @@ export async function createLabMemberProfile(input: {
     role: input.role,
     laboratoryIds: input.laboratoryIds.slice(0, SCHEMA_CONSTRAINTS.MAX_LAB_IDS),
     status: input.status || UserStatus.ACTIVE,
+    isDemoAccount: false,
     createdAt: serverTimestamp(),
     lastLogin: serverTimestamp(),
   };
@@ -837,19 +852,43 @@ export async function resetToFourTemporaryAccounts(currentAuthUid?: string): Pro
         role: UserRole.ADMIN,
         laboratoryIds: ['LCSCO'],
       },
+      {
+        uid: 'temp-technician',
+        fullName: 'Lab Engineer',
+        email: 'technician@lcsco.dz',
+        role: UserRole.TECHNICIAN,
+        laboratoryIds: ['LCSCO'],
+      },
+      {
+        uid: 'temp-professor',
+        fullName: 'Professor',
+        email: 'professor@lcsco.dz',
+        role: UserRole.PROFESSOR,
+        laboratoryIds: ['LCSCO'],
+      },
+      {
+        uid: 'temp-phd-student',
+        fullName: 'PhD Student',
+        email: 'student@lcsco.dz',
+        role: UserRole.PHD_STUDENT,
+        laboratoryIds: ['LCSCO'],
+      },
     ];
 
     for (const acc of tempAccounts) {
-      await setDoc(doc(db, 'users', acc.uid), {
-        uid: acc.uid,
-        fullName: acc.fullName,
-        email: acc.email,
-        role: acc.role,
-        laboratoryIds: acc.laboratoryIds,
-        status: UserStatus.ACTIVE,
-        createdAt: serverTimestamp(),
-        lastLogin: serverTimestamp(),
-      });
+      if (acc.uid !== currentAuthUid) {
+        await setDoc(doc(db, 'users', acc.uid), {
+          uid: acc.uid,
+          fullName: acc.fullName,
+          email: acc.email,
+          role: acc.role,
+          laboratoryIds: acc.laboratoryIds,
+          status: UserStatus.ACTIVE,
+          isDemoAccount: true,
+          createdAt: serverTimestamp(),
+          lastLogin: serverTimestamp(),
+        });
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'users/resetToFourTemporaryAccounts');
@@ -940,5 +979,427 @@ export async function clearAllFirestoreInventory(): Promise<void> {
     }
   } catch {
     // Ignore permission errors if non-admin
+  }
+}
+
+/**
+ * Persists a physical storage location (Cabinet layout) in Firestore
+ */
+export async function saveFirestorePhysicalLocation(config: PhysicalLocationConfig): Promise<void> {
+  try {
+    const locRef = doc(db, 'physicalLocations', config.id);
+    await setDoc(locRef, {
+      id: config.id,
+      room: config.room,
+      cabinet: config.cabinet,
+      cabinetLabel: config.cabinetLabel || config.cabinet,
+      storageClassification: config.storageClassification || 'General storage',
+      sides: config.sides || ['Left', 'Right'],
+      shelves: config.shelves || ['1', '2', '3', '4'],
+      positions: config.positions || ['01', '02', '03', '04', '05'],
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `physicalLocations/${config.id}`);
+  }
+}
+
+/**
+ * Deletes a physical storage location from Firestore
+ */
+export async function deleteFirestorePhysicalLocation(id: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'physicalLocations', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `physicalLocations/${id}`);
+  }
+}
+
+/**
+ * Seeds initial physical cabinets in Firestore if empty
+ */
+export async function seedInitialPhysicalLocations(): Promise<void> {
+  try {
+    const snap = await getDocs(collection(db, 'physicalLocations'));
+    if (snap.empty) {
+      for (const loc of INITIAL_PHYSICAL_LOCATIONS) {
+        await setDoc(doc(db, 'physicalLocations', loc.id), {
+          id: loc.id,
+          room: loc.room,
+          cabinet: loc.cabinet,
+          cabinetLabel: loc.cabinetLabel,
+          storageClassification: loc.storageClassification,
+          sides: loc.sides,
+          shelves: loc.shelves,
+          positions: loc.positions,
+        });
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'physicalLocations');
+  }
+}
+
+/**
+ * Persists a stock adjustment request to Firestore
+ */
+export async function saveFirestoreAdjustmentRequest(req: StockAdjustmentRequest): Promise<void> {
+  try {
+    const payload: any = {
+      requestId: req.requestId,
+      containerId: req.containerId,
+      productId: req.productId,
+      chemicalName: req.chemicalName,
+      laboratoryId: req.laboratoryId,
+      previousQuantity: req.previousQuantity,
+      newQuantity: req.newQuantity,
+      difference: req.difference,
+      unit: req.unit,
+      adjustmentType: req.adjustmentType || 'Correction of entry error',
+      reason: req.reason,
+      requestedByUid: req.requestedByUid,
+      requestedByName: req.requestedByName,
+      requestedByRole: req.requestedByRole,
+      requestedAt: req.requestedAt,
+      status: req.status,
+    };
+    if (req.approverUid) payload.approverUid = req.approverUid;
+    if (req.approverName) payload.approverName = req.approverName;
+    if (req.approverRole) payload.approverRole = req.approverRole;
+    if (req.approvedAt) payload.approvedAt = req.approvedAt;
+
+    await setDoc(doc(db, 'adjustmentRequests', req.requestId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `adjustmentRequests/${req.requestId}`);
+  }
+}
+
+/**
+ * Updates a stock adjustment request in Firestore
+ */
+export async function updateFirestoreAdjustmentRequest(
+  requestId: string,
+  updates: Partial<StockAdjustmentRequest>
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'adjustmentRequests', requestId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `adjustmentRequests/${requestId}`);
+  }
+}
+
+/**
+ * Persists a chemical disposal request in Firestore
+ */
+export async function saveFirestoreDisposalRequest(req: DisposalWorkflowItem): Promise<void> {
+  try {
+    const payload: any = {
+      disposalId: req.disposalId,
+      containerId: req.containerId,
+      productId: req.productId,
+      chemicalName: req.chemicalName,
+      quantity: req.quantity,
+      unit: req.unit,
+      locationCode: req.locationCode,
+      laboratoryId: req.laboratoryId,
+      reason: req.reason,
+      requestedByUid: req.requestedByUid,
+      requestedByName: req.requestedByName,
+      requestedByRole: req.requestedByRole,
+      requestedAt: req.requestedAt,
+      status: req.status,
+    };
+    if (req.approvedByUid) payload.approvedByUid = req.approvedByUid;
+    if (req.approvedByName) payload.approvedByName = req.approvedByName;
+    if (req.approvedByRole) payload.approvedByRole = req.approvedByRole;
+    if (req.approvedAt) payload.approvedAt = req.approvedAt;
+    if (req.disposedByUid) payload.disposedByUid = req.disposedByUid;
+    if (req.disposedByName) payload.disposedByName = req.disposedByName;
+    if (req.disposedAt) payload.disposedAt = req.disposedAt;
+    if (req.wasteManifestCode) payload.wasteManifestCode = req.wasteManifestCode;
+
+    await setDoc(doc(db, 'disposalRequests', req.disposalId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `disposalRequests/${req.disposalId}`);
+  }
+}
+
+/**
+ * Updates a chemical disposal request in Firestore
+ */
+export async function updateFirestoreDisposalRequest(
+  disposalId: string,
+  updates: Partial<DisposalWorkflowItem>
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'disposalRequests', disposalId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `disposalRequests/${disposalId}`);
+  }
+}
+
+/**
+ * Persists a purchase workflow item in Firestore
+ */
+export async function saveFirestorePurchaseRequest(req: PurchaseWorkflowItem): Promise<void> {
+  try {
+    const payload: any = {
+      purchaseId: req.purchaseId,
+      chemicalName: req.chemicalName,
+      casNumber: req.casNumber || 'N/A',
+      formula: req.formula || '—',
+      requestedQuantity: req.requestedQuantity,
+      unit: req.unit,
+      supplier: req.supplier || 'Sigma-Aldrich',
+      laboratoryId: req.laboratoryId,
+      reason: req.reason,
+      requestedByUid: req.requestedByUid,
+      requestedByName: req.requestedByName,
+      requestedByRole: req.requestedByRole,
+      requestedAt: req.requestedAt,
+      status: req.status,
+    };
+    if (req.approvedByUid) payload.approvedByUid = req.approvedByUid;
+    if (req.approvedByName) payload.approvedByName = req.approvedByName;
+    if (req.approvedByRole) payload.approvedByRole = req.approvedByRole;
+    if (req.approvedAt) payload.approvedAt = req.approvedAt;
+    if (req.orderedAt) payload.orderedAt = req.orderedAt;
+    if (req.receivedByUid) payload.receivedByUid = req.receivedByUid;
+    if (req.receivedByName) payload.receivedByName = req.receivedByName;
+    if (req.receivedAt) payload.receivedAt = req.receivedAt;
+    if (req.receivedContainerId) payload.receivedContainerId = req.receivedContainerId;
+    if (req.targetPlacementBox) payload.targetPlacementBox = req.targetPlacementBox;
+
+    await setDoc(doc(db, 'purchaseRequests', req.purchaseId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `purchaseRequests/${req.purchaseId}`);
+  }
+}
+
+/**
+ * Updates a purchase workflow item in Firestore
+ */
+export async function updateFirestorePurchaseRequest(
+  purchaseId: string,
+  updates: Partial<PurchaseWorkflowItem>
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'purchaseRequests', purchaseId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `purchaseRequests/${purchaseId}`);
+  }
+}
+
+/**
+ * Persists a stock rupture incident report in Firestore
+ */
+export async function saveFirestoreStockRupture(req: StockRuptureRequest): Promise<void> {
+  try {
+    const payload: any = {
+      ruptureId: req.ruptureId,
+      containerId: req.containerId,
+      productId: req.productId,
+      chemicalName: req.chemicalName,
+      casNumber: req.casNumber || 'N/A',
+      formula: req.formula || '—',
+      laboratoryId: req.laboratoryId,
+      locationCode: req.locationCode,
+      currentInventoryQuantity: req.currentInventoryQuantity,
+      unit: req.unit,
+      currentInventoryStatus: req.currentInventoryStatus,
+      reportedByUid: req.reportedByUid,
+      reportedByName: req.reportedByName,
+      reportedByRole: req.reportedByRole,
+      reportedAt: req.reportedAt,
+      priority: req.priority,
+      status: req.status,
+      reportCount: req.reportCount || 1,
+      reporters: req.reporters || [],
+    };
+    if (req.comment) payload.comment = req.comment;
+    if (req.reviewedByUid) payload.reviewedByUid = req.reviewedByUid;
+    if (req.reviewedByName) payload.reviewedByName = req.reviewedByName;
+    if (req.reviewedByRole) payload.reviewedByRole = req.reviewedByRole;
+    if (req.reviewedAt) payload.reviewedAt = req.reviewedAt;
+    if (req.resolutionNote) payload.resolutionNote = req.resolutionNote;
+    if (req.resolvedByUid) payload.resolvedByUid = req.resolvedByUid;
+    if (req.resolvedByName) payload.resolvedByName = req.resolvedByName;
+    if (req.resolvedAt) payload.resolvedAt = req.resolvedAt;
+
+    await setDoc(doc(db, 'stockRuptureRequests', req.ruptureId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `stockRuptureRequests/${req.ruptureId}`);
+  }
+}
+
+/**
+ * Updates a stock rupture incident report in Firestore
+ */
+export async function updateFirestoreStockRupture(
+  ruptureId: string,
+  updates: Partial<StockRuptureRequest>
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'stockRuptureRequests', ruptureId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `stockRuptureRequests/${ruptureId}`);
+  }
+}
+
+/**
+ * Batched persistence of role notifications to Firestore
+ */
+export async function saveFirestoreNotifications(notifs: AppNotification[]): Promise<void> {
+  if (!notifs || notifs.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    for (const n of notifs) {
+      const ref = doc(db, 'notifications', n.notificationId);
+      const payload: any = {
+        notificationId: n.notificationId,
+        type: n.type,
+        title: n.title,
+        message: n.message,
+        priority: n.priority,
+        recipientUserId: n.recipientUserId,
+        createdByUserId: n.createdByUserId,
+        createdAt: n.createdAt,
+        isRead: Boolean(n.isRead),
+        isResolved: Boolean(n.isResolved),
+      };
+      if (n.recipientRole) payload.recipientRole = n.recipientRole;
+      if (n.relatedContainerId) payload.relatedContainerId = n.relatedContainerId;
+      if (n.relatedProductId) payload.relatedProductId = n.relatedProductId;
+      if (n.relatedChemicalName) payload.relatedChemicalName = n.relatedChemicalName;
+      if (n.relatedRequestId) payload.relatedRequestId = n.relatedRequestId;
+      if (n.createdByName) payload.createdByName = n.createdByName;
+      if (n.reportCount) payload.reportCount = n.reportCount;
+      batch.set(ref, payload);
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'notifications');
+  }
+}
+
+/**
+ * Marks a notification as read in Firestore
+ */
+export async function markFirestoreNotificationRead(notificationId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'notifications', notificationId), {
+      isRead: true,
+      readAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `notifications/${notificationId}`);
+  }
+}
+
+/**
+ * Marks all notifications for a specific user as read in Firestore
+ */
+export async function markAllFirestoreNotificationsRead(userId: string): Promise<void> {
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'notifications'), where('recipientUserId', '==', userId), where('isRead', '==', false))
+    );
+    if (!snap.empty) {
+      const batch = writeBatch(db);
+      for (const d of snap.docs) {
+        batch.update(d.ref, { isRead: true, readAt: new Date().toISOString() });
+      }
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'notifications');
+  }
+}
+
+/**
+ * Saves lab floor plan configuration in Firestore
+ */
+export async function saveFirestoreFloorPlanConfig(config: LabFloorPlanConfig): Promise<void> {
+  try {
+    await setDoc(doc(db, 'systemSettings', 'floorPlan'), {
+      settingId: 'floorPlan',
+      ...config,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'systemSettings/floorPlan');
+  }
+}
+
+/**
+ * Atomically updates a Container and Product record in Firestore, recording audit transaction
+ */
+export async function updateContainerAndProductInFirestore(params: {
+  product: Product;
+  container: ChemicalContainer;
+  transaction: InventoryTransaction;
+}): Promise<void> {
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'products', params.product.productId), {
+      productId: params.product.productId,
+      chemicalName: params.product.chemicalName,
+      casNumber: params.product.casNumber,
+      formula: params.product.formula,
+      molecularWeight: params.product.molecularWeight,
+      hazardClass: params.product.hazardClass,
+      storageRequirements: params.product.storageRequirements,
+      defaultUnit: params.product.defaultUnit,
+      minimumStock: params.product.minimumStock,
+      reorderLevel: params.product.reorderLevel,
+      sdsUrl: params.product.sdsUrl,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      chemicalClassification: params.product.chemicalClassification || 'Other',
+      storageClassification: params.product.storageClassification || 'General storage',
+    });
+
+    batch.set(doc(db, 'containers', params.container.containerId), {
+      containerId: params.container.containerId,
+      productId: params.container.productId,
+      laboratoryId: params.container.laboratoryId,
+      initialQuantity: params.container.initialQuantity,
+      currentQuantity: params.container.currentQuantity,
+      unit: params.container.unit,
+      location: toFirestoreLocationMap(params.container.location),
+      storageCondition: params.container.storageCondition,
+      status: params.container.status,
+      lotNumber: params.container.lotNumber,
+      supplier: params.container.supplier,
+      expiryDate: params.container.expiryDate,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      createdBy: params.container.createdBy,
+      chemicalClassification: params.container.chemicalClassification || 'Other',
+      storageClassification: params.container.storageClassification || 'General storage',
+    });
+
+    batch.set(doc(db, 'transactions', params.transaction.transactionId), {
+      transactionId: params.transaction.transactionId,
+      type: params.transaction.type,
+      timestamp: serverTimestamp(),
+      userId: params.transaction.userId,
+      userName: params.transaction.userName,
+      laboratoryId: params.transaction.laboratoryId,
+      containerId: params.transaction.containerId,
+      productId: params.transaction.productId,
+      quantityChange: params.transaction.quantityChange,
+      quantityBefore: params.transaction.quantityBefore,
+      quantityAfter: params.transaction.quantityAfter,
+      unit: params.transaction.unit,
+      oldLocation: params.transaction.oldLocation,
+      newLocation: params.transaction.newLocation,
+      oldStatus: params.transaction.oldStatus,
+      newStatus: params.transaction.newStatus,
+      reason: params.transaction.reason,
+    });
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `containers/${params.container.containerId}`);
   }
 }

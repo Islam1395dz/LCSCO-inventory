@@ -25,7 +25,12 @@ import {
 } from '../types/inventory';
 import { Badge, Button, Modal, PageHeader } from './DesignSystem';
 
-export const SettingsView: React.FC = () => {
+export interface SettingsViewProps {
+  initialSection?: 'CALCULATOR' | 'GUIDE' | 'LABELS' | 'LOCATIONS' | 'PROFILE';
+  labelPrintIds?: string[];
+}
+
+export const SettingsView: React.FC<SettingsViewProps> = () => {
   const {
     profile,
     isPreviewMode,
@@ -496,7 +501,7 @@ export const SettingsView: React.FC = () => {
         <Button
           variant="secondary"
           icon={<FileDown className="w-4 h-4" />}
-          onClick={() => downloadApplicationGuidePdf(language)}
+          onClick={() => downloadApplicationGuidePdf('ALL')}
         >
           {isFr ? 'Télécharger le guide PDF' : 'Download PDF Guide'}
         </Button>

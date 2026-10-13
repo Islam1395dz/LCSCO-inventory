@@ -28,7 +28,7 @@ import {
   JarvisUserContext,
   PendingJarvisAction,
 } from '../services/jarvisBackendTools';
-import { ContainerStatus, UserRole } from '../types/inventory';
+import { ContainerStatus, NotificationPriority, UserRole } from '../types/inventory';
 import { formatRoleLabel } from '../utils/formatters';
 
 export type JarvisAssistantState =
@@ -424,7 +424,6 @@ export const JarvisAssistant: React.FC<JarvisAssistantProps> = ({
             requestedQuantity: Number(action.payload.amount || 500),
             unit: action.payload.unit || ('g' as any),
             supplier: action.payload.supplier || 'Sigma-Aldrich',
-            laboratoryId: 'LCSCO',
             reason: action.payload.reason,
           });
         } else if (
@@ -433,6 +432,7 @@ export const JarvisAssistant: React.FC<JarvisAssistantProps> = ({
         ) {
           await reportStockRupture({
             containerId: action.payload.containerId,
+            priority: NotificationPriority.HIGH,
             comment: action.payload.reason,
           });
         } else if (action.actionType === 'REGISTER_CONTAINER') {

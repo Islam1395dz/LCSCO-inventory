@@ -40,6 +40,33 @@ export interface RoleManualSpec {
   }>;
 }
 
+export interface RoleGuideSection {
+  role: UserRole;
+  title: string;
+  badge: string;
+  email: string;
+  accessCode: string;
+  overview: string;
+  allowedActions: string[];
+  restrictedActions: string[];
+  screenMockup: {
+    activeNav: string;
+    windowTitle: string;
+    primaryWidgetTitle: string;
+    primaryWidgetSubtitle: string;
+    deleteButtonState: 'ENABLED' | 'LOCKED' | 'LOCKED (Director Only)' | string;
+    highlightBanner: string;
+    sampleActionText: string;
+  };
+  stepByStepWorkflows: Array<{
+    stepNumber: string;
+    workflowTitle: string;
+    navigationPath: string;
+    instructions: string[];
+    expectedResult: string;
+  }>;
+}
+
 export const LCSCO_ROLE_MANUALS: RoleManualSpec[] = [
   {
     role: UserRole.ADMIN,

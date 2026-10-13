@@ -74,12 +74,18 @@ export const CHEMICAL_CLASSIFICATIONS = [
   'Hydrocarbons',
   'Aromatic compounds',
   'Heterocyclic compounds',
+  'Heterocycles',
   'Organometallic compounds',
+  'Metals',
+  'Inorganics',
+  'Phosphorus compounds',
+  'Sulfur compounds',
   'Oxidizing agents',
   'Reducing agents',
   'Solvents',
   'Buffers',
   'Indicators / dyes',
+  'Indicators',
   'Polymers',
   'Surfactants',
   'Other',
@@ -97,6 +103,7 @@ export const STORAGE_CLASSIFICATIONS = [
   'Oxidizer cabinet',
   'Refrigerated (+4°C / -20°C)',
   'General synthesis cabinet',
+  'General storage',
 ] as const;
 
 export type StorageClassification = (typeof STORAGE_CLASSIFICATIONS)[number];

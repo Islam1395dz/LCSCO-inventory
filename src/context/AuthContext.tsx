@@ -7,14 +7,17 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError, parseDisplayError } from '../firebase';
 import {
@@ -47,13 +50,36 @@ import {
   assertRolePermission,
   buildStorageLocation,
   calculateCorrectionMutation,
+  calculateWithdrawalMutation,
   computeStockStatus,
   hasRolePermission,
+  toFirestoreLocationMap,
 } from '../services/inventoryDomain';
 import {
   clearAllFirestoreInventory,
+  correctStockDiscrepancy,
+  createChemicalContainer,
+  deleteChemicalContainer,
+  deleteFirestorePhysicalLocation,
+  flagContainerIssue,
+  markAllFirestoreNotificationsRead,
+  markFirestoreNotificationRead,
   resetToFourTemporaryAccounts,
+  saveFirestoreAdjustmentRequest,
+  saveFirestoreDisposalRequest,
+  saveFirestoreFloorPlanConfig,
+  saveFirestoreNotifications,
+  saveFirestorePhysicalLocation,
+  saveFirestorePurchaseRequest,
+  saveFirestoreStockRupture,
   seedInitialLabInventory,
+  seedInitialPhysicalLocations,
+  updateContainerAndProductInFirestore,
+  updateFirestoreAdjustmentRequest,
+  updateFirestoreDisposalRequest,
+  updateFirestorePurchaseRequest,
+  updateFirestoreStockRupture,
+  withdrawChemicalStock,
 } from '../services/inventoryService';
 import {
   buildNotificationsForRecipients,
@@ -108,6 +134,39 @@ export const TEMPORARY_LCSCO_ACCOUNTS: TemporaryAccountSpec[] = [
       'Full access to inventory, physical storage locations, stock movements, controlled quantity adjustments & approvals, disposal/purchase approvals, user & role governance, audit logs, and system settings.',
     laboratoryIds: ['LCSCO'],
   },
+  {
+    uid: 'temp-technician',
+    fullName: 'Lab Engineer',
+    email: 'technician@lcsco.dz',
+    accessCode: 'LCSCO2026',
+    role: UserRole.TECHNICIAN,
+    badge: '2. LAB ENGINEER — Operational Inventory Manager',
+    summary:
+      'Manages daily chemical inventory, receives orders, records stock entries/withdrawals, performs physical corrections, and handles chemical waste disposal.',
+    laboratoryIds: ['LCSCO'],
+  },
+  {
+    uid: 'temp-professor',
+    fullName: 'Professor',
+    email: 'professor@lcsco.dz',
+    accessCode: 'LCSCO2026',
+    role: UserRole.PROFESSOR,
+    badge: '3. PROFESSOR — Research Group Supervisor',
+    summary:
+      'Approves chemical purchase and disposal requests, oversees laboratory stock usage, and monitors safety compliance.',
+    laboratoryIds: ['LCSCO'],
+  },
+  {
+    uid: 'temp-phd-student',
+    fullName: 'PhD Student',
+    email: 'student@lcsco.dz',
+    accessCode: 'LCSCO2026',
+    role: UserRole.PHD_STUDENT,
+    badge: '4. PHD STUDENT — Researcher / Reagent User',
+    summary:
+      'Logs reagent consumption, submits purchase requests, and reports stock ruptures or low levels.',
+    laboratoryIds: ['LCSCO'],
+  },
 ];
 
 export const INITIAL_TEMPORARY_USERS: UserProfile[] = TEMPORARY_LCSCO_ACCOUNTS.map((acc) => ({
@@ -118,6 +177,7 @@ export const INITIAL_TEMPORARY_USERS: UserProfile[] = TEMPORARY_LCSCO_ACCOUNTS.m
   role: acc.role,
   laboratoryIds: ['LCSCO'],
   status: UserStatus.ACTIVE,
+  isDemoAccount: true,
   createdAt: '2026-10-06T08:00:00Z',
   lastLogin: '2026-10-06T08:00:00Z',
 }));
@@ -269,6 +329,31 @@ interface AuthAndInventoryContextValue {
     nextStatus: StockRuptureStatus;
     resolutionNote?: string;
   }) => void;
+  // Direct Routine Withdrawals & Container Registration
+  recordWithdrawal: (params: {
+    containerId: string;
+    amount: number;
+    unit: ChemicalUnit;
+    reason: string;
+  }) => Promise<void>;
+  registerContainer: (params: {
+    containerId?: string;
+    productId: string;
+    laboratoryId: string;
+    initialQuantity: number;
+    currentQuantity: number;
+    unit: ChemicalUnit;
+    building?: string;
+    room?: string;
+    unitName?: string;
+    side?: 'Left' | 'Right';
+    shelf?: string;
+    position?: string;
+    storageCondition?: string;
+    lotNumber?: string;
+    supplier?: string;
+    expiryDate?: string;
+  }) => Promise<string>;
   // Enforced Workflow Actions (UI + Action-level RBAC)
   canPerform: (action: PermissionAction) => boolean;
   submitStockAdjustmentRequest: (params: {
@@ -494,11 +579,10 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         if (!snap.exists()) {
           const initialRole: UserRole = isBootstrapped ? UserRole.ADMIN : UserRole.PHD_STUDENT;
           const defaultName =
-            initialRole === UserRole.ADMIN
-              ? 'Director'
-              : 'PhD Student';
+            (user.displayName && user.displayName.trim()) ||
+            (initialRole === UserRole.ADMIN ? 'Director' : 'Researcher');
 
-          const newProfileData = {
+          const newProfileData: any = {
             uid: user.uid,
             fullName: defaultName.slice(0, SCHEMA_CONSTRAINTS.FULL_NAME_MAX_LENGTH),
             email: (user.email || 'director@lcsco.dz').slice(
@@ -508,10 +592,16 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
             role: initialRole,
             laboratoryIds: ['LCSCO'],
             status: UserStatus.ACTIVE,
+            isDemoAccount: false,
             createdAt: serverTimestamp(),
             lastLogin: serverTimestamp(),
           };
+          if (user.photoURL) {
+            newProfileData.avatarUrl = user.photoURL;
+          }
           await setDoc(userRef, newProfileData);
+
+          await seedInitialPhysicalLocations();
 
           if (isBootstrapped) {
             await seedInitialLabInventory({
@@ -523,9 +613,26 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
           }
         } else {
           const existingData = snap.data() as UserProfile;
-          await updateDoc(userRef, {
+          const updatePayload: any = {
             lastLogin: serverTimestamp(),
-          });
+            isDemoAccount: false,
+          };
+          if (
+            user.displayName &&
+            (!existingData.fullName ||
+              existingData.fullName === 'Researcher' ||
+              existingData.fullName === 'PhD Student')
+          ) {
+            updatePayload.fullName = user.displayName.slice(
+              0,
+              SCHEMA_CONSTRAINTS.FULL_NAME_MAX_LENGTH
+            );
+          }
+          if (user.photoURL && !existingData.avatarUrl) {
+            updatePayload.avatarUrl = user.photoURL;
+          }
+          await updateDoc(userRef, updatePayload);
+          await seedInitialPhysicalLocations();
 
           if (
             isBootstrapped ||
@@ -662,11 +769,140 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       }
     );
 
+    const unsubLocations = onSnapshot(
+      collection(db, 'physicalLocations'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as PhysicalLocationConfig);
+        list.sort((a, b) => a.cabinet.localeCompare(b.cabinet));
+        if (list.length > 0) {
+          setPhysicalLocations(list);
+        }
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.LIST, 'physicalLocations');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
+    const unsubAdjustments = onSnapshot(
+      collection(db, 'adjustmentRequests'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as StockAdjustmentRequest);
+        list.sort(
+          (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+        );
+        setAdjustmentRequests(list);
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.LIST, 'adjustmentRequests');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
+    const unsubDisposals = onSnapshot(
+      collection(db, 'disposalRequests'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as DisposalWorkflowItem);
+        list.sort(
+          (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+        );
+        setDisposalRequests(list);
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.LIST, 'disposalRequests');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
+    const unsubPurchases = onSnapshot(
+      collection(db, 'purchaseRequests'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as PurchaseWorkflowItem);
+        list.sort(
+          (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+        );
+        setPurchaseRequests(list);
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.LIST, 'purchaseRequests');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
+    const unsubRuptures = onSnapshot(
+      collection(db, 'stockRuptureRequests'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as StockRuptureRequest);
+        list.sort(
+          (a, b) => new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime()
+        );
+        setStockRuptureRequests(list);
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.LIST, 'stockRuptureRequests');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
+    const unsubNotifications = onSnapshot(
+      collection(db, 'notifications'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as AppNotification);
+        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setNotifications(list);
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.LIST, 'notifications');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
+    const unsubFloorPlan = onSnapshot(
+      doc(db, 'systemSettings', 'floorPlan'),
+      (snap) => {
+        if (snap.exists()) {
+          setLabFloorPlanConfig(snap.data() as LabFloorPlanConfig);
+        }
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.GET, 'systemSettings/floorPlan');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
     return () => {
       unsubLabs();
       unsubProducts();
       unsubContainers();
       unsubTransactions();
+      unsubLocations();
+      unsubAdjustments();
+      unsubDisposals();
+      unsubPurchases();
+      unsubRuptures();
+      unsubNotifications();
+      unsubFloorPlan();
     };
   }, [authReady, firebaseUser, profile?.uid]);
 
@@ -713,16 +949,14 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
   // 4. Real-time Users Collection Listener
   useEffect(() => {
     if (!authReady || !firebaseUser || !profile) return;
-    if (!isAdminOrProf) {
-      setAllUsers(INITIAL_TEMPORARY_USERS);
-      return;
-    }
 
     const unsubUsers = onSnapshot(
       collection(db, 'users'),
       (snap) => {
         const list = snap.docs.map((d) => d.data() as UserProfile);
-        setAllUsers(list);
+        if (list.length > 0) {
+          setAllUsers(list);
+        }
       },
       (err) => {
         try {
@@ -734,7 +968,7 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     );
 
     return () => unsubUsers();
-  }, [authReady, firebaseUser, profile?.uid, isAdminOrProf]);
+  }, [authReady, firebaseUser, profile?.uid]);
 
   const persistSharedState = (nextState: {
     containers: ChemicalContainer[];
@@ -943,7 +1177,11 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       ...partialConfig,
       updatedAt: new Date().toISOString(),
     };
-    updatePreviewState({ labFloorPlanConfig: merged });
+    if (firebaseUser) {
+      saveFirestoreFloorPlanConfig(merged).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({ labFloorPlanConfig: merged });
+    }
   };
 
   /**
@@ -992,15 +1230,23 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
           })
         : containers;
 
-    updatePreviewState({
-      physicalLocations: nextList,
-      containers: updatedContainers,
-    });
+    if (firebaseUser) {
+      saveFirestorePhysicalLocation(config).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({
+        physicalLocations: nextList,
+        containers: updatedContainers,
+      });
+    }
   };
 
   const deletePhysicalLocation = (id: string) => {
     const nextList = physicalLocations.filter((p) => p.id !== id);
-    updatePreviewState({ physicalLocations: nextList });
+    if (firebaseUser) {
+      deleteFirestorePhysicalLocation(id).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({ physicalLocations: nextList });
+    }
   };
 
   const renameShelfInCabinet = (params: {
@@ -1045,10 +1291,17 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       return c;
     });
 
-    updatePreviewState({
-      physicalLocations: updatedLocations,
-      containers: updatedContainers,
-    });
+    if (firebaseUser) {
+      saveFirestorePhysicalLocation({
+        ...cab,
+        shelves: uniqueShelves,
+      }).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({
+        physicalLocations: updatedLocations,
+        containers: updatedContainers,
+      });
+    }
   };
 
   const deleteShelfFromCabinet = (params: { cabinetId: string; shelf: string }) => {
@@ -1062,7 +1315,14 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     const updatedLocations = physicalLocations.map((p) =>
       p.id === cab.id ? { ...p, shelves: updatedShelves } : p
     );
-    updatePreviewState({ physicalLocations: updatedLocations });
+    if (firebaseUser) {
+      saveFirestorePhysicalLocation({
+        ...cab,
+        shelves: updatedShelves,
+      }).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({ physicalLocations: updatedLocations });
+    }
   };
 
   /**
@@ -1229,11 +1489,21 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       reason: `[Full Record Edit by ${roleLabel}] Updated ${params.chemicalName} (${finalContainerId}) at ${nextLoc.code}`,
     };
 
-    updatePreviewState({
-      products: updatedProducts,
-      containers: updatedContainers,
-      transactions: [newTx, ...transactions],
-    });
+    if (firebaseUser) {
+      const prodToUpdate = updatedProducts.find((p) => p.productId === existingContainer.productId)!;
+      const contToUpdate = updatedContainers.find((c) => c.containerId === finalContainerId)!;
+      updateContainerAndProductInFirestore({
+        product: prodToUpdate,
+        container: contToUpdate,
+        transaction: newTx,
+      }).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({
+        products: updatedProducts,
+        containers: updatedContainers,
+        transactions: [newTx, ...transactions],
+      });
+    }
   };
 
   const deleteContainerById = (containerId: string) => {
@@ -1243,9 +1513,20 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       PermissionAction.ARCHIVE_REMOVE_CHEMICAL,
       'Only the Director or Lab Engineer can delete inventory items.'
     );
-    updatePreviewState({
-      containers: containers.filter((c) => c.containerId !== containerId),
-    });
+    if (firebaseUser) {
+      deleteChemicalContainer({
+        containerId,
+        actor: {
+          uid: effectiveProfile.uid,
+          fullName: effectiveProfile.fullName,
+          role: effectiveProfile.role,
+        },
+      }).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({
+        containers: containers.filter((c) => c.containerId !== containerId),
+      });
+    }
   };
 
   /**
@@ -1513,12 +1794,42 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     });
 
     const finalCabinets = Array.from(cabMap.values());
-    updatePreviewState({
-      physicalLocations: finalCabinets,
-      products: nextProducts,
-      containers: nextContainers,
-      transactions: nextTransactions,
-    });
+    if (firebaseUser) {
+      try {
+        const batch = writeBatch(db);
+        for (const loc of finalCabinets) {
+          batch.set(doc(db, 'physicalLocations', loc.id), {
+            id: loc.id,
+            room: loc.room,
+            cabinet: loc.cabinet,
+            cabinetLabel: loc.cabinetLabel,
+            storageClassification: loc.storageClassification,
+            sides: loc.sides,
+            shelves: loc.shelves,
+            positions: loc.positions,
+          });
+        }
+        for (const prod of nextProducts) {
+          batch.set(doc(db, 'products', prod.productId), prod);
+        }
+        for (const cont of nextContainers) {
+          batch.set(doc(db, 'containers', cont.containerId), {
+            ...cont,
+            location: toFirestoreLocationMap(cont.location),
+          });
+        }
+        await batch.commit();
+      } catch (err) {
+        setError(parseDisplayError(err));
+      }
+    } else {
+      updatePreviewState({
+        physicalLocations: finalCabinets,
+        products: nextProducts,
+        containers: nextContainers,
+        transactions: nextTransactions,
+      });
+    }
 
     return {
       cabinetsCount: finalCabinets.length,
@@ -1586,46 +1897,85 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       relatedChemicalName: chemName,
     });
 
-    updatePreviewState({
-      notifications: [...newNotifs, ...notifications],
-      containers: containers.map((c) =>
-        c.containerId === container.containerId
-          ? {
-              ...c,
-              currentQuantity: calc.quantityAfter,
-              initialQuantity: Math.max(c.initialQuantity, calc.quantityAfter),
-              status: calc.newStatus,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      ),
-      transactions: [
-        {
-          transactionId: txId,
-          type: TransactionType.CORRECTION,
-          timestamp: new Date().toISOString(),
-          userId: effectiveProfile.uid,
-          userName: `${effectiveProfile.fullName} (${roleLabel})`,
-          userRole: effectiveProfile.role,
-          laboratoryId: container.laboratoryId,
-          containerId: container.containerId,
-          productId: container.productId,
-          quantityChange: calc.quantityChange,
-          quantityBefore: calc.quantityBefore,
-          quantityAfter: calc.quantityAfter,
-          unit: container.unit,
-          oldLocation: container.location.code,
-          newLocation: container.location.code,
-          oldStatus: calc.oldStatus,
-          newStatus: calc.newStatus,
-          reason: `[Quantity Adjustment: ${params.adjustmentType}] ${
-            params.comment?.trim() || 'Confirmed by ' + roleLabel
-          }`,
-          adjustmentType: params.adjustmentType,
+    if (firebaseUser) {
+      saveFirestoreAdjustmentRequest({
+        requestId: txId,
+        containerId: container.containerId,
+        productId: container.productId,
+        chemicalName: chemName,
+        laboratoryId: container.laboratoryId,
+        previousQuantity: calc.quantityBefore,
+        newQuantity: calc.quantityAfter,
+        difference: calc.quantityChange,
+        unit: container.unit,
+        adjustmentType: params.adjustmentType,
+        reason: fullReason,
+        requestedByUid: effectiveProfile.uid,
+        requestedByName: effectiveProfile.fullName,
+        requestedByRole: effectiveProfile.role,
+        requestedAt: new Date().toISOString(),
+        status: 'APPROVED',
+        approverUid: effectiveProfile.uid,
+        approverName: effectiveProfile.fullName,
+        approverRole: effectiveProfile.role,
+        approvedAt: new Date().toISOString(),
+      }).catch(() => {});
+      saveFirestoreNotifications(newNotifs).catch(() => {});
+      correctStockDiscrepancy({
+        containerId: container.containerId,
+        measuredQuantity: params.newQuantity,
+        unit: container.unit,
+        reason: `[Quantity Adjustment: ${params.adjustmentType}] ${
+          params.comment?.trim() || 'Confirmed by ' + roleLabel
+        }`,
+        actor: {
+          uid: effectiveProfile.uid,
+          fullName: effectiveProfile.fullName,
+          role: effectiveProfile.role,
         },
-        ...transactions,
-      ],
-    });
+      }).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({
+        notifications: [...newNotifs, ...notifications],
+        containers: containers.map((c) =>
+          c.containerId === container.containerId
+            ? {
+                ...c,
+                currentQuantity: calc.quantityAfter,
+                initialQuantity: Math.max(c.initialQuantity, calc.quantityAfter),
+                status: calc.newStatus,
+                updatedAt: new Date().toISOString(),
+              }
+            : c
+        ),
+        transactions: [
+          {
+            transactionId: txId,
+            type: TransactionType.CORRECTION,
+            timestamp: new Date().toISOString(),
+            userId: effectiveProfile.uid,
+            userName: `${effectiveProfile.fullName} (${roleLabel})`,
+            userRole: effectiveProfile.role,
+            laboratoryId: container.laboratoryId,
+            containerId: container.containerId,
+            productId: container.productId,
+            quantityChange: calc.quantityChange,
+            quantityBefore: calc.quantityBefore,
+            quantityAfter: calc.quantityAfter,
+            unit: container.unit,
+            oldLocation: container.location.code,
+            newLocation: container.location.code,
+            oldStatus: calc.oldStatus,
+            newStatus: calc.newStatus,
+            reason: `[Quantity Adjustment: ${params.adjustmentType}] ${
+              params.comment?.trim() || 'Confirmed by ' + roleLabel
+            }`,
+            adjustmentType: params.adjustmentType,
+          },
+          ...transactions,
+        ],
+      });
+    }
   };
 
   /**
@@ -1634,26 +1984,40 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
   const sendRoleNotification = (params: CreateRoleNotificationParams) => {
     const generated = buildNotificationsForRecipients(allUsers, params);
     if (generated.length === 0) return;
-    updatePreviewState({
-      notifications: [...generated, ...notifications],
-    });
+    if (firebaseUser) {
+      saveFirestoreNotifications(generated).catch(() => {});
+    } else {
+      updatePreviewState({
+        notifications: [...generated, ...notifications],
+      });
+    }
   };
 
   const markNotificationAsRead = (notificationId: string) => {
-    const updated = markNotificationReadInList(notifications, notificationId);
-    updatePreviewState({ notifications: updated });
+    if (firebaseUser) {
+      markFirestoreNotificationRead(notificationId).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      const updated = markNotificationReadInList(notifications, notificationId);
+      updatePreviewState({ notifications: updated });
+    }
   };
 
   const markAllNotificationsAsRead = () => {
     if (!effectiveProfile) return;
-    const canonicalRoleUser = INITIAL_TEMPORARY_USERS.find(
-      (u) => u.role === effectiveProfile.role
-    );
-    let updated = markAllUserNotificationsReadInList(notifications, effectiveProfile.uid);
-    if (canonicalRoleUser && canonicalRoleUser.uid !== effectiveProfile.uid) {
-      updated = markAllUserNotificationsReadInList(updated, canonicalRoleUser.uid);
+    if (firebaseUser) {
+      markAllFirestoreNotificationsRead(effectiveProfile.uid).catch((err) =>
+        setError(parseDisplayError(err))
+      );
+    } else {
+      const canonicalRoleUser = INITIAL_TEMPORARY_USERS.find(
+        (u) => u.role === effectiveProfile.role
+      );
+      let updated = markAllUserNotificationsReadInList(notifications, effectiveProfile.uid);
+      if (canonicalRoleUser && canonicalRoleUser.uid !== effectiveProfile.uid) {
+        updated = markAllUserNotificationsReadInList(updated, canonicalRoleUser.uid);
+      }
+      updatePreviewState({ notifications: updated });
     }
-    updatePreviewState({ notifications: updated });
   };
 
   const reportStockRupture = (params: {
@@ -1687,10 +2051,15 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       allUsers,
     });
 
-    updatePreviewState({
-      stockRuptureRequests: result.updatedRuptures,
-      notifications: result.updatedNotifications,
-    });
+    if (firebaseUser) {
+      saveFirestoreStockRupture(result.ruptureRequest).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(result.updatedNotifications).catch(() => {});
+    } else {
+      updatePreviewState({
+        stockRuptureRequests: result.updatedRuptures,
+        notifications: result.updatedNotifications,
+      });
+    }
 
     return {
       ruptureRequest: result.ruptureRequest,
@@ -1724,10 +2093,184 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       allUsers,
     });
 
-    updatePreviewState({
-      stockRuptureRequests: result.updatedRuptures,
-      notifications: result.updatedNotifications,
+    if (firebaseUser) {
+      updateFirestoreStockRupture(params.ruptureId, {
+        status: params.nextStatus,
+        reviewedByUid: effectiveProfile.uid,
+        reviewedByName: effectiveProfile.fullName,
+        reviewedByRole: effectiveProfile.role,
+        reviewedAt: new Date().toISOString(),
+        ...(params.resolutionNote ? { resolutionNote: params.resolutionNote } : {}),
+      }).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(result.updatedNotifications).catch(() => {});
+    } else {
+      updatePreviewState({
+        stockRuptureRequests: result.updatedRuptures,
+        notifications: result.updatedNotifications,
+      });
+    }
+  };
+
+  const recordWithdrawal = async (params: {
+    containerId: string;
+    amount: number;
+    unit: ChemicalUnit;
+    reason: string;
+  }) => {
+    if (!effectiveProfile) throw new Error('Authentication required.');
+    const container = containers.find((c) => c.containerId === params.containerId);
+    if (!container) throw new Error(`Container ${params.containerId} not found.`);
+
+    if (firebaseUser) {
+      await withdrawChemicalStock({
+        containerId: container.containerId,
+        amount: params.amount,
+        unit: params.unit,
+        reason: params.reason,
+        actor: {
+          uid: effectiveProfile.uid,
+          fullName: effectiveProfile.fullName,
+          role: effectiveProfile.role,
+        },
+      });
+    } else {
+      const calc = calculateWithdrawalMutation(container, params.amount, params.unit, params.reason);
+      const txId = `WD-${Date.now().toString(36).toUpperCase()}`;
+      updatePreviewState({
+        containers: containers.map((c) =>
+          c.containerId === container.containerId
+            ? {
+                ...c,
+                currentQuantity: calc.quantityAfter,
+                status: calc.newStatus,
+                updatedAt: new Date().toISOString(),
+              }
+            : c
+        ),
+        transactions: [
+          {
+            transactionId: txId,
+            type: TransactionType.WITHDRAWAL,
+            timestamp: new Date().toISOString(),
+            userId: effectiveProfile.uid,
+            userName: effectiveProfile.fullName,
+            userRole: effectiveProfile.role,
+            laboratoryId: container.laboratoryId,
+            containerId: container.containerId,
+            productId: container.productId,
+            quantityChange: calc.quantityChange,
+            quantityBefore: calc.quantityBefore,
+            quantityAfter: calc.quantityAfter,
+            unit: container.unit,
+            oldLocation: container.location.code,
+            newLocation: container.location.code,
+            oldStatus: calc.oldStatus,
+            newStatus: calc.newStatus,
+            reason: params.reason.trim(),
+          },
+          ...transactions,
+        ],
+      });
+    }
+  };
+
+  const registerContainer = async (params: {
+    containerId?: string;
+    productId: string;
+    laboratoryId: string;
+    initialQuantity: number;
+    currentQuantity: number;
+    unit: ChemicalUnit;
+    building?: string;
+    room?: string;
+    unitName?: string;
+    side?: 'Left' | 'Right';
+    shelf?: string;
+    position?: string;
+    storageCondition?: string;
+    lotNumber?: string;
+    supplier?: string;
+    expiryDate?: string;
+  }) => {
+    if (!effectiveProfile) throw new Error('Authentication required.');
+    const generatedId =
+      params.containerId?.trim() ||
+      `BOT-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+    const loc = buildStorageLocation({
+      building: params.building || 'LCSCO',
+      room: params.room || '204',
+      unit: params.unitName || 'FLAM-01',
+      side: params.side || 'Left',
+      shelf: params.shelf || '1',
+      position: params.position || '01',
     });
+
+    if (firebaseUser) {
+      await createChemicalContainer({
+        containerId: generatedId,
+        productId: params.productId,
+        laboratoryId: params.laboratoryId || 'LCSCO',
+        initialQuantity: params.initialQuantity,
+        currentQuantity: params.currentQuantity,
+        unit: params.unit,
+        location: loc,
+        storageCondition: params.storageCondition || 'Standard storage',
+        lotNumber: params.lotNumber || 'LOT-2026',
+        supplier: params.supplier || 'Sigma-Aldrich',
+        expiryDate: params.expiryDate || '2028-12-31',
+        actor: {
+          uid: effectiveProfile.uid,
+          fullName: effectiveProfile.fullName,
+          role: effectiveProfile.role,
+        },
+      });
+    } else {
+      const newBottle: ChemicalContainer = {
+        containerId: generatedId,
+        productId: params.productId,
+        laboratoryId: params.laboratoryId || 'LCSCO',
+        initialQuantity: params.initialQuantity,
+        currentQuantity: params.currentQuantity,
+        unit: params.unit,
+        location: loc,
+        storageCondition: params.storageCondition || 'Standard storage',
+        status: ContainerStatus.NORMAL,
+        lotNumber: params.lotNumber || 'LOT-2026',
+        supplier: params.supplier || 'Sigma-Aldrich',
+        expiryDate: params.expiryDate || '2028-12-31',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        createdBy: effectiveProfile.uid,
+      };
+      const txId = `REG-${Date.now().toString(36).toUpperCase()}`;
+      updatePreviewState({
+        containers: [newBottle, ...containers],
+        transactions: [
+          {
+            transactionId: txId,
+            type: TransactionType.ADDITION,
+            timestamp: new Date().toISOString(),
+            userId: effectiveProfile.uid,
+            userName: effectiveProfile.fullName,
+            userRole: effectiveProfile.role,
+            laboratoryId: newBottle.laboratoryId,
+            containerId: newBottle.containerId,
+            productId: newBottle.productId,
+            quantityChange: newBottle.currentQuantity,
+            quantityBefore: 0,
+            quantityAfter: newBottle.currentQuantity,
+            unit: newBottle.unit,
+            oldLocation: loc.code,
+            newLocation: loc.code,
+            oldStatus: ContainerStatus.NORMAL,
+            newStatus: ContainerStatus.NORMAL,
+            reason: `Registered new chemical container into ${loc.code}`,
+          },
+          ...transactions,
+        ],
+      });
+    }
+    return generatedId;
   };
 
   const submitStockAdjustmentRequest = (params: {
@@ -1786,14 +2329,18 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         : {}),
     };
 
-    if (isDirector) {
-      const txId = `COR-${Date.now().toString(36).toUpperCase()}`;
+    if (firebaseUser) {
+      saveFirestoreAdjustmentRequest(newRequest).catch((err) => setError(parseDisplayError(err)));
       const newNotifs = buildNotificationsForRecipients(allUsers, {
         type: NotificationType.STOCK_ADJUSTMENT_REQUEST,
-        title: `Stock Adjusted by Director: ${chemName}`,
-        message: `Director adjusted ${container.containerId} (${chemName}) from ${calc.quantityBefore} to ${calc.quantityAfter} ${container.unit}. Reason: "${params.reason.trim()}"`,
-        priority: NotificationPriority.MEDIUM,
-        targetRoles: [UserRole.TECHNICIAN, UserRole.PROFESSOR],
+        title: isDirector
+          ? `Stock Adjusted by Director: ${chemName}`
+          : `Stock Adjustment Request: ${chemName} (${container.containerId})`,
+        message: isDirector
+          ? `Director adjusted ${container.containerId} (${chemName}) from ${calc.quantityBefore} to ${calc.quantityAfter} ${container.unit}. Reason: "${params.reason.trim()}"`
+          : `${effectiveProfile.fullName} submitted physical count ${reqId} for ${container.containerId}: ${calc.quantityBefore} → ${calc.quantityAfter} ${container.unit} (Δ ${calc.quantityChange > 0 ? '+' : ''}${calc.quantityChange} ${container.unit}). Reason: "${params.reason.trim()}"`,
+        priority: isDirector ? NotificationPriority.MEDIUM : NotificationPriority.HIGH,
+        targetRoles: isDirector ? [UserRole.TECHNICIAN, UserRole.PROFESSOR] : [UserRole.ADMIN],
         createdByUserId: effectiveProfile.uid,
         createdByName: effectiveProfile.fullName,
         relatedContainerId: container.containerId,
@@ -1801,64 +2348,95 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         relatedChemicalName: chemName,
         relatedRequestId: reqId,
       });
-
-      updatePreviewState({
-        adjustmentRequests: [newRequest, ...adjustmentRequests],
-        notifications: [...newNotifs, ...notifications],
-        containers: containers.map((c) =>
-          c.containerId === container.containerId
-            ? {
-                ...c,
-                currentQuantity: calc.quantityAfter,
-                status: calc.newStatus,
-                updatedAt: new Date().toISOString(),
-              }
-            : c
-        ),
-        transactions: [
-          {
-            transactionId: txId,
-            type: TransactionType.CORRECTION,
-            timestamp: new Date().toISOString(),
-            userId: effectiveProfile.uid,
-            userName: `${effectiveProfile.fullName} (Director)`,
-            userRole: effectiveProfile.role,
-            laboratoryId: container.laboratoryId,
-            containerId: container.containerId,
-            productId: container.productId,
-            quantityChange: calc.quantityChange,
-            quantityBefore: calc.quantityBefore,
-            quantityAfter: calc.quantityAfter,
-            unit: container.unit,
-            oldLocation: container.location.code,
-            newLocation: container.location.code,
-            oldStatus: calc.oldStatus,
-            newStatus: calc.newStatus,
-            reason: `[Stock Adjustment ${reqId} Approved by Director] ${params.reason.trim()}`,
-            adjustmentType: params.adjustmentType,
+      saveFirestoreNotifications(newNotifs).catch(() => {});
+      if (isDirector) {
+        correctStockDiscrepancy({
+          containerId: container.containerId,
+          measuredQuantity: params.measuredQuantity,
+          unit: params.unit,
+          reason: `[Stock Adjustment ${reqId} Approved by Director] ${params.reason.trim()}`,
+          actor: {
+            uid: effectiveProfile.uid,
+            fullName: effectiveProfile.fullName,
+            role: effectiveProfile.role,
           },
-          ...transactions,
-        ],
-      });
+        }).catch((err) => setError(parseDisplayError(err)));
+      }
     } else {
-      const newNotifs = buildNotificationsForRecipients(allUsers, {
-        type: NotificationType.STOCK_ADJUSTMENT_REQUEST,
-        title: `Stock Adjustment Request: ${chemName} (${container.containerId})`,
-        message: `${effectiveProfile.fullName} submitted physical count ${reqId} for ${container.containerId}: ${calc.quantityBefore} → ${calc.quantityAfter} ${container.unit} (Δ ${calc.quantityChange > 0 ? '+' : ''}${calc.quantityChange} ${container.unit}). Reason: "${params.reason.trim()}"`,
-        priority: NotificationPriority.HIGH,
-        targetRoles: [UserRole.ADMIN],
-        createdByUserId: effectiveProfile.uid,
-        createdByName: effectiveProfile.fullName,
-        relatedContainerId: container.containerId,
-        relatedProductId: container.productId,
-        relatedChemicalName: chemName,
-        relatedRequestId: reqId,
-      });
+      if (isDirector) {
+        const txId = `COR-${Date.now().toString(36).toUpperCase()}`;
+        const newNotifs = buildNotificationsForRecipients(allUsers, {
+          type: NotificationType.STOCK_ADJUSTMENT_REQUEST,
+          title: `Stock Adjusted by Director: ${chemName}`,
+          message: `Director adjusted ${container.containerId} (${chemName}) from ${calc.quantityBefore} to ${calc.quantityAfter} ${container.unit}. Reason: "${params.reason.trim()}"`,
+          priority: NotificationPriority.MEDIUM,
+          targetRoles: [UserRole.TECHNICIAN, UserRole.PROFESSOR],
+          createdByUserId: effectiveProfile.uid,
+          createdByName: effectiveProfile.fullName,
+          relatedContainerId: container.containerId,
+          relatedProductId: container.productId,
+          relatedChemicalName: chemName,
+          relatedRequestId: reqId,
+        });
 
-      updatePreviewState({
-        adjustmentRequests: [newRequest, ...adjustmentRequests],
-        notifications: [...newNotifs, ...notifications],
-      });
+        updatePreviewState({
+          adjustmentRequests: [newRequest, ...adjustmentRequests],
+          notifications: [...newNotifs, ...notifications],
+          containers: containers.map((c) =>
+            c.containerId === container.containerId
+              ? {
+                  ...c,
+                  currentQuantity: calc.quantityAfter,
+                  status: calc.newStatus,
+                  updatedAt: new Date().toISOString(),
+                }
+              : c
+          ),
+          transactions: [
+            {
+              transactionId: txId,
+              type: TransactionType.CORRECTION,
+              timestamp: new Date().toISOString(),
+              userId: effectiveProfile.uid,
+              userName: `${effectiveProfile.fullName} (Director)`,
+              userRole: effectiveProfile.role,
+              laboratoryId: container.laboratoryId,
+              containerId: container.containerId,
+              productId: container.productId,
+              quantityChange: calc.quantityChange,
+              quantityBefore: calc.quantityBefore,
+              quantityAfter: calc.quantityAfter,
+              unit: container.unit,
+              oldLocation: container.location.code,
+              newLocation: container.location.code,
+              oldStatus: calc.oldStatus,
+              newStatus: calc.newStatus,
+              reason: `[Stock Adjustment ${reqId} Approved by Director] ${params.reason.trim()}`,
+              adjustmentType: params.adjustmentType,
+            },
+            ...transactions,
+          ],
+        });
+      } else {
+        const newNotifs = buildNotificationsForRecipients(allUsers, {
+          type: NotificationType.STOCK_ADJUSTMENT_REQUEST,
+          title: `Stock Adjustment Request: ${chemName} (${container.containerId})`,
+          message: `${effectiveProfile.fullName} submitted physical count ${reqId} for ${container.containerId}: ${calc.quantityBefore} → ${calc.quantityAfter} ${container.unit} (Δ ${calc.quantityChange > 0 ? '+' : ''}${calc.quantityChange} ${container.unit}). Reason: "${params.reason.trim()}"`,
+          priority: NotificationPriority.HIGH,
+          targetRoles: [UserRole.ADMIN],
+          createdByUserId: effectiveProfile.uid,
+          createdByName: effectiveProfile.fullName,
+          relatedContainerId: container.containerId,
+          relatedProductId: container.productId,
+          relatedChemicalName: chemName,
+          relatedRequestId: reqId,
+        });
+
+        updatePreviewState({
+          adjustmentRequests: [newRequest, ...adjustmentRequests],
+          notifications: [...newNotifs, ...notifications],
+        });
+      }
     }
   };
 
@@ -1910,64 +2488,88 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       relatedRequestId: reqItem.requestId,
     });
 
-    if (!approve) {
-      updatePreviewState({
-        adjustmentRequests: updatedRequests,
-        notifications: [...requesterFeedback, ...resolvedNotifs],
-      });
-      return;
-    }
-
-    const container = containers.find((c) => c.containerId === reqItem.containerId);
-    if (!container) {
-      updatePreviewState({
-        adjustmentRequests: updatedRequests,
-        notifications: [...requesterFeedback, ...resolvedNotifs],
-      });
-      return;
-    }
-
-    const newStatus = computeStockStatus(reqItem.newQuantity, container.initialQuantity);
-    const txId = `COR-${Date.now().toString(36).toUpperCase()}`;
-
-    updatePreviewState({
-      adjustmentRequests: updatedRequests,
-      notifications: [...requesterFeedback, ...resolvedNotifs],
-      containers: containers.map((c) =>
-        c.containerId === container.containerId
-          ? {
-              ...c,
-              currentQuantity: reqItem.newQuantity,
-              status: newStatus,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      ),
-      transactions: [
-        {
-          transactionId: txId,
-          type: TransactionType.CORRECTION,
-          timestamp: new Date().toISOString(),
-          userId: effectiveProfile.uid,
-          userName: `${effectiveProfile.fullName} (Director · Approved ${reqItem.requestedByName}'s Count)`,
-          userRole: effectiveProfile.role,
-          laboratoryId: container.laboratoryId,
-          containerId: container.containerId,
-          productId: container.productId,
-          quantityChange: reqItem.difference,
-          quantityBefore: reqItem.previousQuantity,
-          quantityAfter: reqItem.newQuantity,
-          unit: container.unit,
-          oldLocation: container.location.code,
-          newLocation: container.location.code,
-          oldStatus: container.status,
-          newStatus,
+    if (firebaseUser) {
+      updateFirestoreAdjustmentRequest(requestId, {
+        status: approve ? 'APPROVED' : 'REJECTED',
+        approverUid: effectiveProfile.uid,
+        approverName: effectiveProfile.fullName,
+        approverRole: effectiveProfile.role,
+        approvedAt: new Date().toISOString(),
+      }).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(requesterFeedback).catch(() => {});
+      if (approve) {
+        correctStockDiscrepancy({
+          containerId: reqItem.containerId,
+          measuredQuantity: reqItem.newQuantity,
+          unit: reqItem.unit,
           reason: `[Approved Stock Adjustment ${reqItem.requestId} by ${reqItem.requestedByName}] ${reqItem.reason}`,
-          adjustmentType: reqItem.adjustmentType,
-        },
-        ...transactions,
-      ],
-    });
+          actor: {
+            uid: effectiveProfile.uid,
+            fullName: effectiveProfile.fullName,
+            role: effectiveProfile.role,
+          },
+        }).catch((err) => setError(parseDisplayError(err)));
+      }
+    } else {
+      if (!approve) {
+        updatePreviewState({
+          adjustmentRequests: updatedRequests,
+          notifications: [...requesterFeedback, ...resolvedNotifs],
+        });
+        return;
+      }
+
+      const container = containers.find((c) => c.containerId === reqItem.containerId);
+      if (!container) {
+        updatePreviewState({
+          adjustmentRequests: updatedRequests,
+          notifications: [...requesterFeedback, ...resolvedNotifs],
+        });
+        return;
+      }
+
+      const newStatus = computeStockStatus(reqItem.newQuantity, container.initialQuantity);
+      const txId = `COR-${Date.now().toString(36).toUpperCase()}`;
+
+      updatePreviewState({
+        adjustmentRequests: updatedRequests,
+        notifications: [...requesterFeedback, ...resolvedNotifs],
+        containers: containers.map((c) =>
+          c.containerId === container.containerId
+            ? {
+                ...c,
+                currentQuantity: reqItem.newQuantity,
+                status: newStatus,
+                updatedAt: new Date().toISOString(),
+              }
+            : c
+        ),
+        transactions: [
+          {
+            transactionId: txId,
+            type: TransactionType.CORRECTION,
+            timestamp: new Date().toISOString(),
+            userId: effectiveProfile.uid,
+            userName: `${effectiveProfile.fullName} (Director · Approved ${reqItem.requestedByName}'s Count)`,
+            userRole: effectiveProfile.role,
+            laboratoryId: container.laboratoryId,
+            containerId: container.containerId,
+            productId: container.productId,
+            quantityChange: reqItem.difference,
+            quantityBefore: reqItem.previousQuantity,
+            quantityAfter: reqItem.newQuantity,
+            unit: container.unit,
+            oldLocation: container.location.code,
+            newLocation: container.location.code,
+            oldStatus: container.status,
+            newStatus,
+            reason: `[Approved Stock Adjustment ${reqItem.requestId} by ${reqItem.requestedByName}] ${reqItem.reason}`,
+            adjustmentType: reqItem.adjustmentType,
+          },
+          ...transactions,
+        ],
+      });
+    }
   };
 
   const createDisposalRequest = (params: { containerId: string; reason: string }) => {
@@ -2012,38 +2614,53 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     });
 
     const txId = `DSP-REQ-${Date.now().toString(36).toUpperCase()}`;
-    updatePreviewState({
-      disposalRequests: [newItem, ...disposalRequests],
-      notifications: [...newNotifs, ...notifications],
-      containers: containers.map((c) =>
-        c.containerId === container.containerId
-          ? { ...c, status: ContainerStatus.QUARANTINED, updatedAt: new Date().toISOString() }
-          : c
-      ),
-      transactions: [
-        {
-          transactionId: txId,
-          type: TransactionType.STATUS_CHANGE,
-          timestamp: new Date().toISOString(),
-          userId: effectiveProfile.uid,
-          userName: `${effectiveProfile.fullName}`,
-          userRole: effectiveProfile.role,
-          laboratoryId: container.laboratoryId,
-          containerId: container.containerId,
-          productId: container.productId,
-          quantityChange: 0,
-          quantityBefore: container.currentQuantity,
-          quantityAfter: container.currentQuantity,
-          unit: container.unit,
-          oldLocation: container.location.code,
-          newLocation: container.location.code,
-          oldStatus: container.status,
-          newStatus: ContainerStatus.QUARANTINED,
-          reason: `[Disposal Requested ${disposalId}] ${params.reason.trim()}`,
+    if (firebaseUser) {
+      saveFirestoreDisposalRequest(newItem).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(newNotifs).catch(() => {});
+      flagContainerIssue({
+        containerId: container.containerId,
+        targetStatus: ContainerStatus.QUARANTINED,
+        reason: `[Disposal Requested ${disposalId}] ${params.reason.trim()}`,
+        actor: {
+          uid: effectiveProfile.uid,
+          fullName: effectiveProfile.fullName,
+          role: effectiveProfile.role,
         },
-        ...transactions,
-      ],
-    });
+      }).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({
+        disposalRequests: [newItem, ...disposalRequests],
+        notifications: [...newNotifs, ...notifications],
+        containers: containers.map((c) =>
+          c.containerId === container.containerId
+            ? { ...c, status: ContainerStatus.QUARANTINED, updatedAt: new Date().toISOString() }
+            : c
+        ),
+        transactions: [
+          {
+            transactionId: txId,
+            type: TransactionType.STATUS_CHANGE,
+            timestamp: new Date().toISOString(),
+            userId: effectiveProfile.uid,
+            userName: `${effectiveProfile.fullName}`,
+            userRole: effectiveProfile.role,
+            laboratoryId: container.laboratoryId,
+            containerId: container.containerId,
+            productId: container.productId,
+            quantityChange: 0,
+            quantityBefore: container.currentQuantity,
+            quantityAfter: container.currentQuantity,
+            unit: container.unit,
+            oldLocation: container.location.code,
+            newLocation: container.location.code,
+            oldStatus: container.status,
+            newStatus: ContainerStatus.QUARANTINED,
+            reason: `[Disposal Requested ${disposalId}] ${params.reason.trim()}`,
+          },
+          ...transactions,
+        ],
+      });
+    }
   };
 
   const approveDisposalRequest = (disposalId: string, approve: boolean) => {
@@ -2092,54 +2709,73 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     });
 
     const container = containers.find((c) => c.containerId === item.containerId);
-    if (!container) {
-      updatePreviewState({
-        disposalRequests: updatedDisposals,
-        notifications: [...followUpNotifs, ...notifications],
-      });
-      return;
-    }
-
     const nextContainerStatus = approve
       ? ContainerStatus.DISPOSAL_REQUIRED
-      : computeStockStatus(container.currentQuantity, container.initialQuantity);
+      : container
+      ? computeStockStatus(container.currentQuantity, container.initialQuantity)
+      : ContainerStatus.NORMAL;
 
     const txId = `DSP-APP-${Date.now().toString(36).toUpperCase()}`;
 
-    updatePreviewState({
-      disposalRequests: updatedDisposals,
-      notifications: [...followUpNotifs, ...notifications],
-      containers: containers.map((c) =>
-        c.containerId === container.containerId
-          ? { ...c, status: nextContainerStatus, updatedAt: new Date().toISOString() }
-          : c
-      ),
-      transactions: [
-        {
-          transactionId: txId,
-          type: TransactionType.STATUS_CHANGE,
-          timestamp: new Date().toISOString(),
-          userId: effectiveProfile.uid,
-          userName: `${effectiveProfile.fullName}`,
-          userRole: effectiveProfile.role,
-          laboratoryId: container.laboratoryId,
-          containerId: container.containerId,
-          productId: container.productId,
-          quantityChange: 0,
-          quantityBefore: container.currentQuantity,
-          quantityAfter: container.currentQuantity,
-          unit: container.unit,
-          oldLocation: container.location.code,
-          newLocation: container.location.code,
-          oldStatus: container.status,
-          newStatus: nextContainerStatus,
-          reason: approve
-            ? `[Disposal Approved ${disposalId} by ${effectiveProfile.fullName}] Ready for Lab Engineer physical disposal.`
-            : `[Disposal Rejected ${disposalId} by ${effectiveProfile.fullName}] Restored to active stock.`,
-        },
-        ...transactions,
-      ],
-    });
+    if (firebaseUser) {
+      updateFirestoreDisposalRequest(disposalId, {
+        status: approve ? 'APPROVED' : 'REJECTED',
+        approvedByUid: effectiveProfile.uid,
+        approvedByName: effectiveProfile.fullName,
+        approvedByRole: effectiveProfile.role,
+        approvedAt: new Date().toISOString(),
+      }).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(followUpNotifs).catch(() => {});
+      if (container) {
+        updateDoc(doc(db, 'containers', container.containerId), {
+          status: nextContainerStatus,
+          updatedAt: serverTimestamp(),
+        }).catch((err) => setError(parseDisplayError(err)));
+      }
+    } else {
+      if (!container) {
+        updatePreviewState({
+          disposalRequests: updatedDisposals,
+          notifications: [...followUpNotifs, ...notifications],
+        });
+        return;
+      }
+
+      updatePreviewState({
+        disposalRequests: updatedDisposals,
+        notifications: [...followUpNotifs, ...notifications],
+        containers: containers.map((c) =>
+          c.containerId === container.containerId
+            ? { ...c, status: nextContainerStatus, updatedAt: new Date().toISOString() }
+            : c
+        ),
+        transactions: [
+          {
+            transactionId: txId,
+            type: TransactionType.STATUS_CHANGE,
+            timestamp: new Date().toISOString(),
+            userId: effectiveProfile.uid,
+            userName: `${effectiveProfile.fullName}`,
+            userRole: effectiveProfile.role,
+            laboratoryId: container.laboratoryId,
+            containerId: container.containerId,
+            productId: container.productId,
+            quantityChange: 0,
+            quantityBefore: container.currentQuantity,
+            quantityAfter: container.currentQuantity,
+            unit: container.unit,
+            oldLocation: container.location.code,
+            newLocation: container.location.code,
+            oldStatus: container.status,
+            newStatus: nextContainerStatus,
+            reason: approve
+              ? `[Disposal Approved ${disposalId} by ${effectiveProfile.fullName}] Ready for Lab Engineer physical disposal.`
+              : `[Disposal Rejected ${disposalId} by ${effectiveProfile.fullName}] Restored to active stock.`,
+          },
+          ...transactions,
+        ],
+      });
+    }
   };
 
   const recordPhysicalDisposal = (disposalId: string, wasteManifestCode = 'LCSCO-HAZ-2026') => {
@@ -2180,45 +2816,71 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     const container = containers.find((c) => c.containerId === item.containerId);
     const txId = `DSP-FIN-${Date.now().toString(36).toUpperCase()}`;
 
-    updatePreviewState({
-      disposalRequests: updatedDisposals,
-      notifications: resolvedNotifs,
-      containers: containers.map((c) =>
-        c.containerId === item.containerId
-          ? {
-              ...c,
-              currentQuantity: 0,
-              status: ContainerStatus.DISPOSAL_REQUIRED,
-              updatedAt: new Date().toISOString(),
-            }
-          : c
-      ),
-      transactions: container
-        ? [
-            {
-              transactionId: txId,
-              type: TransactionType.STATUS_CHANGE,
-              timestamp: new Date().toISOString(),
-              userId: effectiveProfile.uid,
-              userName: `${effectiveProfile.fullName}`,
-              userRole: effectiveProfile.role,
-              laboratoryId: container.laboratoryId,
-              containerId: container.containerId,
-              productId: container.productId,
-              quantityChange: -container.currentQuantity,
-              quantityBefore: container.currentQuantity,
-              quantityAfter: 0,
-              unit: container.unit,
-              oldLocation: container.location.code,
-              newLocation: 'HAZARDOUS-WASTE-BUNKER',
-              oldStatus: container.status,
-              newStatus: ContainerStatus.DISPOSAL_REQUIRED,
-              reason: `[Physical Disposal Recorded ${disposalId}] Manifest: ${wasteManifestCode}`,
-            },
-            ...transactions,
-          ]
-        : transactions,
-    });
+    if (firebaseUser) {
+      updateFirestoreDisposalRequest(disposalId, {
+        status: 'DISPOSED',
+        disposedByUid: effectiveProfile.uid,
+        disposedByName: effectiveProfile.fullName,
+        disposedAt: new Date().toISOString(),
+        wasteManifestCode,
+      }).catch((err) => setError(parseDisplayError(err)));
+      if (container) {
+        updateDoc(doc(db, 'containers', container.containerId), {
+          currentQuantity: 0,
+          status: ContainerStatus.DISPOSAL_REQUIRED,
+          location: toFirestoreLocationMap({
+            building: 'LCSCO',
+            room: 'BUNKER',
+            unit: 'HAZARDOUS-WASTE-BUNKER',
+            cabinetLabel: 'Waste Bunker',
+            shelf: '1',
+            position: '01',
+            code: 'HAZARDOUS-WASTE-BUNKER',
+          }),
+          updatedAt: serverTimestamp(),
+        }).catch((err) => setError(parseDisplayError(err)));
+      }
+    } else {
+      updatePreviewState({
+        disposalRequests: updatedDisposals,
+        notifications: resolvedNotifs,
+        containers: containers.map((c) =>
+          c.containerId === item.containerId
+            ? {
+                ...c,
+                currentQuantity: 0,
+                status: ContainerStatus.DISPOSAL_REQUIRED,
+                updatedAt: new Date().toISOString(),
+              }
+            : c
+        ),
+        transactions: container
+          ? [
+              {
+                transactionId: txId,
+                type: TransactionType.STATUS_CHANGE,
+                timestamp: new Date().toISOString(),
+                userId: effectiveProfile.uid,
+                userName: `${effectiveProfile.fullName}`,
+                userRole: effectiveProfile.role,
+                laboratoryId: container.laboratoryId,
+                containerId: container.containerId,
+                productId: container.productId,
+                quantityChange: -container.currentQuantity,
+                quantityBefore: container.currentQuantity,
+                quantityAfter: 0,
+                unit: container.unit,
+                oldLocation: container.location.code,
+                newLocation: 'HAZARDOUS-WASTE-BUNKER',
+                oldStatus: container.status,
+                newStatus: ContainerStatus.DISPOSAL_REQUIRED,
+                reason: `[Physical Disposal Recorded ${disposalId}] Manifest: ${wasteManifestCode}`,
+              },
+              ...transactions,
+            ]
+          : transactions,
+      });
+    }
   };
 
   const createPurchaseRequest = (params: {
@@ -2266,10 +2928,15 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       relatedRequestId: purchaseId,
     });
 
-    updatePreviewState({
-      purchaseRequests: [newItem, ...purchaseRequests],
-      notifications: [...newNotifs, ...notifications],
-    });
+    if (firebaseUser) {
+      saveFirestorePurchaseRequest(newItem).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(newNotifs).catch(() => {});
+    } else {
+      updatePreviewState({
+        purchaseRequests: [newItem, ...purchaseRequests],
+        notifications: [...newNotifs, ...notifications],
+      });
+    }
   };
 
   const approveOrOrderPurchaseRequest = (
@@ -2313,10 +2980,22 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         })
       : [];
 
-    updatePreviewState({
-      purchaseRequests: updated,
-      notifications: [...approvalNotifs, ...notifications],
-    });
+    if (firebaseUser) {
+      updateFirestorePurchaseRequest(purchaseId, {
+        status: nextStage,
+        approvedByUid: target?.approvedByUid || effectiveProfile.uid,
+        approvedByName: target?.approvedByName || effectiveProfile.fullName,
+        approvedByRole: target?.approvedByRole || effectiveProfile.role,
+        approvedAt: target?.approvedAt || new Date().toISOString(),
+        ...(nextStage === 'ORDERED' ? { orderedAt: new Date().toISOString() } : {}),
+      }).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(approvalNotifs).catch(() => {});
+    } else {
+      updatePreviewState({
+        purchaseRequests: updated,
+        notifications: [...approvalNotifs, ...notifications],
+      });
+    }
   };
 
   const receivePurchaseOrderIntoInventory = (params: {
@@ -2436,13 +3115,19 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       relatedRequestId: item.purchaseId,
     });
 
-    updatePreviewState({
-      products: nextProducts,
-      containers: [newBottle, ...containers],
-      purchaseRequests: updatedPurchases,
-      notifications: [...receivedNotifs, ...resolvedNotifs],
-      transactions: [
-        {
+    if (firebaseUser) {
+      updateFirestorePurchaseRequest(params.purchaseId, {
+        status: 'RECEIVED',
+        receivedByUid: effectiveProfile.uid,
+        receivedByName: effectiveProfile.fullName,
+        receivedAt: new Date().toISOString(),
+        receivedContainerId: containerId,
+      }).catch((err) => setError(parseDisplayError(err)));
+      saveFirestoreNotifications(receivedNotifs).catch(() => {});
+      updateContainerAndProductInFirestore({
+        product: matchingProduct,
+        container: newBottle,
+        transaction: {
           transactionId: txId,
           type: TransactionType.ADDITION,
           timestamp: new Date().toISOString(),
@@ -2462,9 +3147,38 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
           newStatus: ContainerStatus.NORMAL,
           reason: `[Purchase Order ${item.purchaseId} Received & Added to Inventory] Requested by ${item.requestedByName}, Approved by ${item.approvedByName || 'Director'}`,
         },
-        ...transactions,
-      ],
-    });
+      }).catch((err) => setError(parseDisplayError(err)));
+    } else {
+      updatePreviewState({
+        products: nextProducts,
+        containers: [newBottle, ...containers],
+        purchaseRequests: updatedPurchases,
+        notifications: [...receivedNotifs, ...resolvedNotifs],
+        transactions: [
+          {
+            transactionId: txId,
+            type: TransactionType.ADDITION,
+            timestamp: new Date().toISOString(),
+            userId: effectiveProfile.uid,
+            userName: `${effectiveProfile.fullName}`,
+            userRole: effectiveProfile.role,
+            laboratoryId: 'LCSCO',
+            containerId,
+            productId: matchingProduct.productId,
+            quantityChange: item.requestedQuantity,
+            quantityBefore: 0,
+            quantityAfter: item.requestedQuantity,
+            unit: item.unit,
+            oldLocation: loc.code,
+            newLocation: loc.code,
+            oldStatus: ContainerStatus.NORMAL,
+            newStatus: ContainerStatus.NORMAL,
+            reason: `[Purchase Order ${item.purchaseId} Received & Added to Inventory] Requested by ${item.requestedByName}, Approved by ${item.approvedByName || 'Director'}`,
+          },
+          ...transactions,
+        ],
+      });
+    }
   };
 
   return (
@@ -2525,6 +3239,8 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         createPurchaseRequest,
         approveOrOrderPurchaseRequest,
         receivePurchaseOrderIntoInventory,
+        recordWithdrawal,
+        registerContainer,
         isAdmin,
         isProfessor,
         isTechnician,

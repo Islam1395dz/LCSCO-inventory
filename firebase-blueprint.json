@@ -20,13 +20,13 @@
         "email": {
           "type": "string",
           "format": "email",
-          "description": "Verified institutional email address",
+          "description": "Institutional email address",
           "minLength": 3,
           "maxLength": 254
         },
         "role": {
           "type": "string",
-          "enum": ["ADMIN", "PROFESSOR", "TECHNICIAN", "PHD_STUDENT", "GUEST"],
+          "enum": ["ADMIN", "PROFESSOR", "TECHNICIAN", "PHD_STUDENT", "STUDENT_RESEARCHER", "GUEST"],
           "description": "Assigned role governing permissions across inventory and audit workflows"
         },
         "laboratoryIds": {
@@ -36,7 +36,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["ACTIVE", "PENDING"],
+          "enum": ["ACTIVE", "PENDING", "DEACTIVATED"],
           "description": "Account activation status"
         },
         "createdAt": {
@@ -48,6 +48,14 @@
           "type": "string",
           "format": "date-time",
           "description": "Server timestamp of the latest session login"
+        },
+        "isDemoAccount": {
+          "type": "boolean",
+          "description": "Flag indicating if account is a trial demonstration persona"
+        },
+        "avatarUrl": {
+          "type": "string",
+          "maxLength": 500
         }
       },
       "required": ["uid", "fullName", "email", "role", "laboratoryIds", "status", "createdAt", "lastLogin"]
@@ -117,7 +125,7 @@
         },
         "storageRequirements": {
           "type": "string",
-          "description": "Required storage conditions (e.g., Flammable Cabinet, Desiccator, -20°C)",
+          "description": "Required storage conditions",
           "minLength": 1,
           "maxLength": 200
         },
@@ -173,7 +181,7 @@
       "properties": {
         "containerId": {
           "type": "string",
-          "description": "Unique physical container barcode/QR identifier (e.g., SOL-001)",
+          "description": "Unique physical container barcode/QR identifier",
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
@@ -204,7 +212,7 @@
         },
         "location": {
           "type": "object",
-          "description": "Structured physical storage coordinates (building, room, unit, shelf, position, code)"
+          "description": "Structured physical storage coordinates"
         },
         "storageCondition": {
           "type": "string",
@@ -360,28 +368,10 @@
         },
         "oldStatus": {
           "type": "string",
-          "enum": [
-            "NORMAL",
-            "LOW_STOCK",
-            "NEARLY_EMPTY",
-            "NEEDS_IDENTIFICATION",
-            "QUARANTINED",
-            "DISPOSAL_REQUIRED",
-            "EXPIRED"
-          ],
           "description": "Container status prior to transaction"
         },
         "newStatus": {
           "type": "string",
-          "enum": [
-            "NORMAL",
-            "LOW_STOCK",
-            "NEARLY_EMPTY",
-            "NEEDS_IDENTIFICATION",
-            "QUARANTINED",
-            "DISPOSAL_REQUIRED",
-            "EXPIRED"
-          ],
           "description": "Container status following transaction"
         },
         "reason": {
@@ -410,6 +400,465 @@
         "newStatus",
         "reason"
       ]
+    },
+    "PhysicalLocation": {
+      "title": "PhysicalLocation",
+      "description": "Physical storage cabinet configuration and organization.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "room": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "cabinet": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "cabinetLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "storageClassification": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "sides": {
+          "type": "array",
+          "maxLength": 10
+        },
+        "shelves": {
+          "type": "array",
+          "maxLength": 50
+        },
+        "positions": {
+          "type": "array",
+          "maxLength": 100
+        }
+      },
+      "required": [
+        "id",
+        "room",
+        "cabinet",
+        "cabinetLabel",
+        "storageClassification",
+        "sides",
+        "shelves",
+        "positions"
+      ]
+    },
+    "StockAdjustmentRequest": {
+      "title": "StockAdjustmentRequest",
+      "description": "Formal stock quantity discrepancy correction request.",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "containerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "productId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "chemicalName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "laboratoryId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "previousQuantity": {
+          "type": "number"
+        },
+        "newQuantity": {
+          "type": "number"
+        },
+        "difference": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "requestedByUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "requestedByName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "requestedByRole": {
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "APPROVED", "REJECTED"]
+        }
+      },
+      "required": [
+        "requestId",
+        "containerId",
+        "productId",
+        "chemicalName",
+        "laboratoryId",
+        "previousQuantity",
+        "newQuantity",
+        "difference",
+        "unit",
+        "reason",
+        "requestedByUid",
+        "requestedByName",
+        "requestedByRole",
+        "requestedAt",
+        "status"
+      ]
+    },
+    "DisposalWorkflowItem": {
+      "title": "DisposalWorkflowItem",
+      "description": "Chemical disposal and hazardous waste workflow tracking.",
+      "type": "object",
+      "properties": {
+        "disposalId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "containerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "productId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "chemicalName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "locationCode": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "laboratoryId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "requestedByUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "requestedByName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "requestedByRole": {
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["REQUESTED", "APPROVED", "DISPOSED", "REJECTED"]
+        }
+      },
+      "required": [
+        "disposalId",
+        "containerId",
+        "productId",
+        "chemicalName",
+        "quantity",
+        "unit",
+        "locationCode",
+        "laboratoryId",
+        "reason",
+        "requestedByUid",
+        "requestedByName",
+        "requestedByRole",
+        "requestedAt",
+        "status"
+      ]
+    },
+    "PurchaseWorkflowItem": {
+      "title": "PurchaseWorkflowItem",
+      "description": "Reagent purchase request and receiving workflow tracking.",
+      "type": "object",
+      "properties": {
+        "purchaseId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "chemicalName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "casNumber": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "formula": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "requestedQuantity": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "supplier": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "laboratoryId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "requestedByUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "requestedByName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "requestedByRole": {
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["REQUESTED", "APPROVED", "ORDERED", "RECEIVED"]
+        }
+      },
+      "required": [
+        "purchaseId",
+        "chemicalName",
+        "casNumber",
+        "formula",
+        "requestedQuantity",
+        "unit",
+        "supplier",
+        "laboratoryId",
+        "reason",
+        "requestedByUid",
+        "requestedByName",
+        "requestedByRole",
+        "requestedAt",
+        "status"
+      ]
+    },
+    "StockRuptureRequest": {
+      "title": "StockRuptureRequest",
+      "description": "Stock rupture incident report and resolution tracking.",
+      "type": "object",
+      "properties": {
+        "ruptureId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "containerId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "productId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "chemicalName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "casNumber": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "formula": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "laboratoryId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "locationCode": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "currentInventoryQuantity": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "currentInventoryStatus": {
+          "type": "string"
+        },
+        "reportedByUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "reportedByName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "reportedByRole": {
+          "type": "string"
+        },
+        "reportedAt": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["REPORTED", "UNDER_REVIEW", "CONFIRMED", "RESOLVED", "REJECTED"]
+        },
+        "reportCount": {
+          "type": "number"
+        },
+        "reporters": {
+          "type": "array",
+          "maxLength": 50
+        }
+      },
+      "required": [
+        "ruptureId",
+        "containerId",
+        "productId",
+        "chemicalName",
+        "casNumber",
+        "formula",
+        "laboratoryId",
+        "locationCode",
+        "currentInventoryQuantity",
+        "unit",
+        "currentInventoryStatus",
+        "reportedByUid",
+        "reportedByName",
+        "reportedByRole",
+        "reportedAt",
+        "priority",
+        "status",
+        "reportCount",
+        "reporters"
+      ]
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "Role-targeted alert or task notification.",
+      "type": "object",
+      "properties": {
+        "notificationId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        },
+        "recipientUserId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdByUserId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "isRead": {
+          "type": "boolean"
+        },
+        "isResolved": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "notificationId",
+        "type",
+        "title",
+        "message",
+        "priority",
+        "recipientUserId",
+        "createdByUserId",
+        "createdAt",
+        "isRead",
+        "isResolved"
+      ]
+    },
+    "SystemSetting": {
+      "title": "SystemSetting",
+      "description": "Laboratory system configuration item.",
+      "type": "object",
+      "properties": {
+        "settingId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["settingId"]
     }
   },
   "firestore": {
@@ -432,6 +881,34 @@
     "/transactions/{transactionId}": {
       "schema": { "$ref": "#/entities/Transaction" },
       "description": "Strictly append-only, immutable audit trail of all inventory actions."
+    },
+    "/physicalLocations/{locationId}": {
+      "schema": { "$ref": "#/entities/PhysicalLocation" },
+      "description": "Physical storage cabinet configs and shelf layouts."
+    },
+    "/adjustmentRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/StockAdjustmentRequest" },
+      "description": "Stock count correction requests."
+    },
+    "/disposalRequests/{disposalId}": {
+      "schema": { "$ref": "#/entities/DisposalWorkflowItem" },
+      "description": "Chemical disposal requests."
+    },
+    "/purchaseRequests/{purchaseId}": {
+      "schema": { "$ref": "#/entities/PurchaseWorkflowItem" },
+      "description": "Chemical purchase requests."
+    },
+    "/stockRuptureRequests/{ruptureId}": {
+      "schema": { "$ref": "#/entities/StockRuptureRequest" },
+      "description": "Stock rupture incident reports."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AppNotification" },
+      "description": "Role-targeted notifications."
+    },
+    "/systemSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/SystemSetting" },
+      "description": "System and lab floor plan configuration."
     }
   }
 }
