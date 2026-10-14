@@ -8,6 +8,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   query,
   runTransaction,
@@ -797,11 +798,26 @@ export async function updateUserPermissions(params: {
 }): Promise<void> {
   const { targetUid, role, status, laboratoryIds } = params;
   try {
-    await updateDoc(doc(db, 'users', targetUid), {
-      role,
-      status,
-      laboratoryIds: laboratoryIds.slice(0, SCHEMA_CONSTRAINTS.MAX_LAB_IDS),
-    });
+    const userRef = doc(db, 'users', targetUid);
+    const snap = await getDoc(userRef);
+    if (!snap.exists()) {
+      await setDoc(userRef, {
+        uid: targetUid,
+        fullName: targetUid,
+        email: `${targetUid.toLowerCase()}@lcsco.dz`,
+        role,
+        status,
+        laboratoryIds: laboratoryIds.slice(0, SCHEMA_CONSTRAINTS.MAX_LAB_IDS),
+        createdAt: serverTimestamp(),
+        lastLogin: serverTimestamp(),
+      });
+    } else {
+      await updateDoc(userRef, {
+        role,
+        status,
+        laboratoryIds: laboratoryIds.slice(0, SCHEMA_CONSTRAINTS.MAX_LAB_IDS),
+      });
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `users/${targetUid}`);
   }
@@ -911,25 +927,18 @@ export async function seedInitialLabInventory(actor: TransactionActor): Promise<
     });
 
     const existingContainers = await getDocs(collection(db, 'containers'));
-    const hasOldTrialContainers = existingContainers.docs.some((d) => {
-      const data = d.data();
-      const unitCode = String(data?.location?.unit || '');
-      return !d.id.startsWith('REA-') || !/^CAB\s+[1234]$/i.test(unitCode);
-    });
+    const existingProducts = await getDocs(collection(db, 'products'));
 
-    if (hasOldTrialContainers || existingContainers.empty) {
-      // Wipe all old trial containers and products
-      for (const d of existingContainers.docs) {
-        await deleteDoc(doc(db, 'containers', d.id));
-      }
-      const existingProducts = await getDocs(collection(db, 'products'));
-      for (const d of existingProducts.docs) {
-        await deleteDoc(doc(db, 'products', d.id));
-      }
+    const existingContIds = new Set(existingContainers.docs.map((d) => d.id));
+    const existingProdIds = new Set(existingProducts.docs.map((d) => d.id));
 
-      // Seed the PDF products and containers
-      for (const prod of INITIAL_DEMO_PRODUCTS) {
-        await setDoc(doc(db, 'products', prod.productId), {
+    // Never delete old inventory — add new catalog items alongside existing ones
+    const missingProducts = INITIAL_DEMO_PRODUCTS.filter((p) => !existingProdIds.has(p.productId));
+    for (let i = 0; i < missingProducts.length; i += 300) {
+      const batch = writeBatch(db);
+      const chunk = missingProducts.slice(i, i + 300);
+      for (const prod of chunk) {
+        batch.set(doc(db, 'products', prod.productId), {
           productId: prod.productId,
           chemicalName: prod.chemicalName,
           casNumber: prod.casNumber,
@@ -945,9 +954,15 @@ export async function seedInitialLabInventory(actor: TransactionActor): Promise<
           updatedAt: serverTimestamp(),
         });
       }
+      await batch.commit();
+    }
 
-      for (const cont of INITIAL_DEMO_CONTAINERS) {
-        await setDoc(doc(db, 'containers', cont.containerId), {
+    const missingContainers = INITIAL_DEMO_CONTAINERS.filter((c) => !existingContIds.has(c.containerId));
+    for (let i = 0; i < missingContainers.length; i += 300) {
+      const batch = writeBatch(db);
+      const chunk = missingContainers.slice(i, i + 300);
+      for (const cont of chunk) {
+        batch.set(doc(db, 'containers', cont.containerId), {
           containerId: cont.containerId,
           productId: cont.productId,
           laboratoryId: 'LCSCO',
@@ -965,6 +980,7 @@ export async function seedInitialLabInventory(actor: TransactionActor): Promise<
           createdBy: actor.uid,
         });
       }
+      await batch.commit();
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'seedInitialLabInventory');
@@ -1024,8 +1040,9 @@ export async function deleteFirestorePhysicalLocation(id: string): Promise<void>
 export async function seedInitialPhysicalLocations(): Promise<void> {
   try {
     const snap = await getDocs(collection(db, 'physicalLocations'));
-    if (snap.empty) {
-      for (const loc of INITIAL_PHYSICAL_LOCATIONS) {
+    const existingLocIds = new Set(snap.docs.map((d) => d.id));
+    for (const loc of INITIAL_PHYSICAL_LOCATIONS) {
+      if (!existingLocIds.has(loc.id)) {
         await setDoc(doc(db, 'physicalLocations', loc.id), {
           id: loc.id,
           room: loc.room,

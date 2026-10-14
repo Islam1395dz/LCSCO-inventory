@@ -73,9 +73,10 @@ export const UserManagementView: React.FC = () => {
 
       const tempPassword = newMemberPassword.trim() || 'LCSCO-2026';
       const generatedUid = `LCSCO-${Date.now().toString(36).toUpperCase()}`;
-
       let createdUid = generatedUid;
-      if (firebaseUser) {
+
+      const actorUid = firebaseUser?.uid || profile.uid || 'temp-director';
+      try {
         createdUid = await createLabMemberProfile({
           uid: generatedUid,
           fullName: newMemberName.trim(),
@@ -86,48 +87,32 @@ export const UserManagementView: React.FC = () => {
           mustChangePassword: true,
           status: UserStatus.ACTIVE,
           actor: {
-            uid: profile.uid,
-            fullName: profile.fullName,
-            role: profile.role,
+            uid: actorUid,
+            fullName: profile.fullName || 'Director',
+            role: profile.role || UserRole.ADMIN,
           },
         });
-      } else {
-        try {
-          createdUid = await createLabMemberProfile({
-            uid: generatedUid,
-            fullName: newMemberName.trim(),
-            email: newMemberEmail.trim(),
-            role: newMemberRole,
-            laboratoryIds: ['LCSCO'],
-            password: tempPassword,
-            mustChangePassword: true,
-            status: UserStatus.ACTIVE,
-            actor: {
-              uid: profile.uid,
-              fullName: profile.fullName,
-              role: profile.role,
-            },
-          });
-        } catch {
-          const createdUser: UserProfile = {
-            uid: generatedUid,
-            fullName: newMemberName.trim(),
-            email: newMemberEmail.trim(),
-            password: tempPassword,
-            mustChangePassword: true,
-            role: newMemberRole,
-            laboratoryIds: ['LCSCO'],
-            status: UserStatus.ACTIVE,
-            createdAt: new Date().toISOString(),
-            lastLogin: new Date().toISOString(),
-          };
-          updatePreviewState({
-            users: [...allUsers, createdUser],
-          });
-        }
+      } catch (fsErr) {
+        console.warn('createLabMemberProfile error:', fsErr);
       }
-      localStorage.setItem(`lcsco_pass_${createdUid}`, tempPassword);
-      localStorage.setItem(`lcsco_must_change_pass_${createdUid}`, 'true');
+
+      const createdUser: UserProfile = {
+        uid: createdUid || generatedUid,
+        fullName: newMemberName.trim(),
+        email: newMemberEmail.trim(),
+        password: tempPassword,
+        mustChangePassword: true,
+        role: newMemberRole,
+        laboratoryIds: ['LCSCO'],
+        status: UserStatus.ACTIVE,
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+      };
+      updatePreviewState({
+        users: [...allUsers.filter((u) => u.uid !== createdUser.uid), createdUser],
+      });
+      localStorage.setItem(`lcsco_pass_${createdUid || generatedUid}`, tempPassword);
+      localStorage.setItem(`lcsco_must_change_pass_${createdUid || generatedUid}`, 'true');
 
       setFeedback({
         type: 'success',

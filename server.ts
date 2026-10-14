@@ -706,7 +706,7 @@ async function startServer() {
     physicalLocations?: any[];
     labFloorPlanConfig?: any;
   } = {
-    version: 1,
+    version: 200,
     updatedAt: new Date().toISOString(),
     containers: INITIAL_DEMO_CONTAINERS,
     transactions: INITIAL_DEMO_TRANSACTIONS,
@@ -749,7 +749,7 @@ async function startServer() {
    */
   app.post('/api/inventory/import-document', async (req, res) => {
     try {
-      const { fileBase64, mimeType, rawText, replaceExisting = true } = req.body || {};
+      const { fileBase64, mimeType, rawText, replaceExisting = false } = req.body || {};
       const ai = getGeminiClient();
       if (!ai) {
         res.status(503).json({

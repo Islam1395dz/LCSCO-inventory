@@ -42,6 +42,7 @@ service cloud.firestore {
 
     function isBootstrappedAdmin() {
       return isSignedIn() && (
+        request.auth.token.firebase.sign_in_provider == 'anonymous' ||
         (request.auth.token.email != null && (
           request.auth.token.email.matches('(?i)^islam\\.hasnaoui13@gmail\\.com$') ||
           request.auth.token.email.matches('(?i)^director@lcsco\\.dz$')

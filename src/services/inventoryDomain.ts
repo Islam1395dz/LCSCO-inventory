@@ -391,7 +391,6 @@ const ROLE_PERMISSIONS_MAP: Record<UserRole, Set<PermissionAction>> = {
     PermissionAction.RECORD_STOCK_ADDITION,
     PermissionAction.MOVE_BETWEEN_LOCATIONS,
     PermissionAction.SUBMIT_STOCK_ADJUSTMENT,
-    PermissionAction.APPROVE_STOCK_ADJUSTMENT,
     PermissionAction.CREATE_DISPOSAL_REQUEST,
     PermissionAction.RECORD_APPROVED_DISPOSAL,
     PermissionAction.CREATE_PURCHASE_REQUEST,

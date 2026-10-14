@@ -35,7 +35,7 @@ export const AuthenticationPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [localAuthError, setLocalAuthError] = useState<string | null>(null);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalAuthError(null);
 
@@ -100,7 +100,7 @@ export const AuthenticationPage: React.FC = () => {
       return;
     }
 
-    loginWithTemporaryAccount(matchedUser.uid);
+    await loginWithTemporaryAccount(matchedUser.uid);
   };
 
   return (

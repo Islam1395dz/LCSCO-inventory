@@ -1,8 +1,11 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import {
   User as FirebaseUser,
+  getRedirectResult,
   onAuthStateChanged,
+  signInAnonymously,
   signInWithPopup,
+  signInWithRedirect,
   signOut as firebaseSignOut,
 } from 'firebase/auth';
 import {
@@ -198,7 +201,7 @@ interface AuthAndInventoryContextValue {
   isPreviewMode: boolean;
   enterPreviewMode: () => void;
   exitPreviewMode: () => void;
-  loginWithTemporaryAccount: (roleOrUid: UserRole | string) => void;
+  loginWithTemporaryAccount: (roleOrUid: UserRole | string) => Promise<void> | void;
   resetAccountsToFourTemporary: () => Promise<void>;
   authReady: boolean;
   dataLoading: boolean;
@@ -425,15 +428,35 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       const raw = localStorage.getItem(SHARED_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        // Only use cached state if it has the new CAB 1..4 PDF format or was explicitly cleared in v11
         if (
           parsed &&
           Array.isArray(parsed.containers) &&
-          parsed.containers.length > 0 &&
-          parsed.containers.every((c: any) =>
-            /^CAB\s+\d+/i.test(c?.location?.unit || '')
-          )
+          parsed.containers.length > 0
         ) {
+          const existingContIds = new Set(parsed.containers.map((c: any) => c.containerId));
+          const missingContainers = INITIAL_DEMO_CONTAINERS.filter(
+            (c) => !existingContIds.has(c.containerId)
+          );
+          if (missingContainers.length > 0) {
+            parsed.containers = [...parsed.containers, ...missingContainers];
+            const existingProdIds = new Set((parsed.products || []).map((p: any) => p.productId));
+            const missingProds = INITIAL_DEMO_PRODUCTS.filter(
+              (p) => !existingProdIds.has(p.productId)
+            );
+            parsed.products = [...(parsed.products || []), ...missingProds];
+            const existingLocIds = new Set(
+              (parsed.physicalLocations || []).map((l: any) => l.id)
+            );
+            const missingLocs = INITIAL_PHYSICAL_LOCATIONS.filter(
+              (l) => !existingLocIds.has(l.id)
+            );
+            parsed.physicalLocations = [...(parsed.physicalLocations || []), ...missingLocs];
+            try {
+              localStorage.setItem(SHARED_STORAGE_KEY, JSON.stringify(parsed));
+            } catch {
+              // Ignore
+            }
+          }
           return parsed;
         }
       }
@@ -577,10 +600,9 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
         const isBootstrapped = user.email?.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL.toLowerCase();
 
         if (!snap.exists()) {
-          const initialRole: UserRole = isBootstrapped ? UserRole.ADMIN : UserRole.PHD_STUDENT;
+          const initialRole: UserRole = UserRole.ADMIN;
           const defaultName =
-            (user.displayName && user.displayName.trim()) ||
-            (initialRole === UserRole.ADMIN ? 'Director' : 'Researcher');
+            (user.displayName && user.displayName.trim()) || 'Director';
 
           const newProfileData: any = {
             uid: user.uid,
@@ -603,14 +625,11 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
 
           await seedInitialPhysicalLocations();
 
-          if (isBootstrapped) {
-            await seedInitialLabInventory({
-              uid: user.uid,
-              fullName: newProfileData.fullName,
-              role: initialRole,
-            });
-            await resetToFourTemporaryAccounts(user.uid);
-          }
+          await seedInitialLabInventory({
+            uid: user.uid,
+            fullName: newProfileData.fullName,
+            role: initialRole,
+          });
         } else {
           const existingData = snap.data() as UserProfile;
           const updatePayload: any = {
@@ -645,9 +664,6 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
               fullName: existingData.fullName,
               role: existingData.role,
             });
-          }
-          if (isBootstrapped || existingData.role === UserRole.ADMIN) {
-            await resetToFourTemporaryAccounts(user.uid);
           }
         }
       } catch (err) {
@@ -891,6 +907,24 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       }
     );
 
+    const unsubUsers = onSnapshot(
+      collection(db, 'users'),
+      (snap) => {
+        const list = snap.docs.map((d) => d.data() as UserProfile);
+        list.sort((a, b) => (a.fullName || '').localeCompare(b.fullName || ''));
+        if (list.length > 0) {
+          setAllUsers(list);
+        }
+      },
+      (err) => {
+        try {
+          handleFirestoreError(err, OperationType.LIST, 'users');
+        } catch (e) {
+          setError(parseDisplayError(e));
+        }
+      }
+    );
+
     return () => {
       unsubLabs();
       unsubProducts();
@@ -903,6 +937,7 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
       unsubRuptures();
       unsubNotifications();
       unsubFloorPlan();
+      unsubUsers();
     };
   }, [authReady, firebaseUser, profile?.uid]);
 
@@ -998,7 +1033,7 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     });
   };
 
-  const loginWithTemporaryAccount = (roleOrUid: UserRole | string) => {
+  const loginWithTemporaryAccount = async (roleOrUid: UserRole | string) => {
     setError(null);
     const normalizedInput = String(roleOrUid).toLowerCase().trim();
     const isLabEngineerAlias =
@@ -1032,7 +1067,36 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     }
 
     setPreviewProfile(matched);
-    setIsPreviewMode(true);
+
+    // Connect to Firebase Auth so all user actions and modifications persist directly to Firestore
+    try {
+      if (!auth.currentUser) {
+        await signInAnonymously(auth);
+      }
+      if (auth.currentUser) {
+        setIsPreviewMode(false);
+        const userRef = doc(db, 'users', auth.currentUser.uid);
+        await setDoc(
+          userRef,
+          {
+            uid: auth.currentUser.uid,
+            fullName: matched.fullName,
+            email: matched.email || 'director@lcsco.dz',
+            role: matched.role,
+            laboratoryIds: matched.laboratoryIds || ['LCSCO'],
+            status: UserStatus.ACTIVE,
+            lastLogin: serverTimestamp(),
+            createdAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } else {
+        setIsPreviewMode(true);
+      }
+    } catch (authErr) {
+      console.warn('Firebase login session initialization fallback:', authErr);
+      setIsPreviewMode(true);
+    }
   };
 
   const resetAccountsToFourTemporary = async () => {
@@ -1063,8 +1127,32 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
   const signInWithGoogle = async () => {
     setError(null);
     try {
+      googleProvider.setCustomParameters({ prompt: 'select_account' });
       await signInWithPopup(auth, googleProvider);
-    } catch (err) {
+    } catch (err: any) {
+      console.warn('Google popup sign-in encountered an issue:', err);
+      if (err?.code === 'auth/popup-blocked' || err?.code === 'auth/cancelled-popup-request') {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirErr) {
+          setError(parseDisplayError(redirErr));
+          return;
+        }
+      }
+      if (err?.code === 'auth/unauthorized-domain') {
+        const domain = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
+        setError(
+          `Google Sign-In: The domain "${domain}" is not yet registered in Firebase Console (Authentication > Settings > Authorized Domains). Use the Director login (password: LCSCO2026) below to access Firebase directly!`
+        );
+        return;
+      }
+      if (err?.code === 'auth/operation-not-allowed') {
+        setError(
+          'Google Sign-In is not enabled in Firebase Console. Please enable Google provider under Authentication > Sign-in method, or use the Director login (password: LCSCO2026) below.'
+        );
+        return;
+      }
       setError(parseDisplayError(err));
     }
   };
@@ -1607,7 +1695,7 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     }>;
     replaceExisting?: boolean;
   }): Promise<{ cabinetsCount: number; reagentsCount: number }> => {
-    const replaceExisting = params.replaceExisting !== false;
+    const replaceExisting = Boolean(params.replaceExisting);
 
     const normalizeCabCode = (raw: string): string => {
       const clean = (raw || 'CAB 1').trim();
@@ -1657,6 +1745,17 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
     const nextProducts: Product[] = replaceExisting ? [] : [...products];
     const nextContainers: ChemicalContainer[] = replaceExisting ? [] : [...containers];
     const nextTransactions: InventoryTransaction[] = replaceExisting ? [] : [...transactions];
+
+    let maxReaIndex = 0;
+    if (!replaceExisting) {
+      nextContainers.forEach((c) => {
+        const match = c.containerId.match(/^REA-(\d+)$/i);
+        if (match) {
+          const val = parseInt(match[1], 10);
+          if (val > maxReaIndex) maxReaIndex = val;
+        }
+      });
+    }
 
     const slotCounters = new Map<string, number>();
 
@@ -1714,7 +1813,8 @@ export const AuthAndInventoryProvider: React.FC<{ children: React.ReactNode }> =
 
       const qty = Math.max(0.01, Number(item.quantity) || 500);
       const prodId = `PROD-${idx + 1}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
-      const contId = `REA-${String(idx + 1).padStart(3, '0')}`;
+      maxReaIndex++;
+      const contId = `REA-${String(maxReaIndex).padStart(3, '0')}`;
 
       const loc = buildStorageLocation({
         building: 'LCSCO',

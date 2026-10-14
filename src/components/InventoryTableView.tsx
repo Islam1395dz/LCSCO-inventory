@@ -515,7 +515,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
           fileBase64: importFileBase64,
           mimeType: importFileMimeType || 'application/pdf',
           rawText: importRawText,
-          replaceExisting: true,
+          replaceExisting: false,
         }),
       });
       const data = await res.json();
@@ -526,7 +526,7 @@ export const InventoryTableView: React.FC<InventoryTableViewProps> = ({
       const result = await importRealInventoryBatch({
         cabinets: data.cabinets || [],
         reagents: data.reagents || [],
-        replaceExisting: true,
+        replaceExisting: false,
       });
 
       setImportModalOpen(false);

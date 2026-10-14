@@ -13,6 +13,11 @@ import {
   StockRuptureRequest,
   StorageClassification,
 } from '../types/inventory';
+import {
+  PDF21_CONTAINERS,
+  PDF21_PHYSICAL_LOCATIONS,
+  PDF21_PRODUCTS,
+} from './pdf21PagesData';
 
 /**
  * Physical Laboratory Cabinets & Hierarchical Storage Definitions
@@ -21,12 +26,9 @@ import {
  * - CAB 2: Cabinet 2 - Hallway (Esters, Aldehydes, Ketones, Alcohols, Acids & Unidentified)
  * - CAB 3: Cabinet 3 - Hallway (Amines Cabinet)
  * - CAB 4: Inside Organic Chemistry Synthesis lab Cabinet
- *
- * Location code format:
- *   CAB 1- Level 1- Left side
- *   CAB 2- Level 2- Right side
+ * Plus the 21-page official LCSCO laboratory locations (Armoires, Frigos, Paillasses)
  */
-export const INITIAL_PHYSICAL_LOCATIONS: PhysicalLocationConfig[] = [
+const BASE_PHYSICAL_LOCATIONS: PhysicalLocationConfig[] = [
   {
     id: 'CAB-1',
     room: 'Hallway',
@@ -485,7 +487,7 @@ const CABINET_LABEL_MAP: Record<string, { label: string; room: string; storageCl
   },
 };
 
-export const INITIAL_DEMO_PRODUCTS: Product[] = PDF_INVENTORY_ROWS.map((row, index) => {
+const BASE_DEMO_PRODUCTS: Product[] = PDF_INVENTORY_ROWS.map((row, index) => {
   const prodId = `PDF-PROD-${String(index + 1).padStart(3, '0')}`;
   const cabMeta = CABINET_LABEL_MAP[row.cabinet];
   const locCode = `${row.cabinet}- Level ${row.level}- ${row.side} side`;
@@ -513,7 +515,7 @@ export const INITIAL_DEMO_PRODUCTS: Product[] = PDF_INVENTORY_ROWS.map((row, ind
   };
 });
 
-export const INITIAL_DEMO_CONTAINERS: ChemicalContainer[] = PDF_INVENTORY_ROWS.map((row, index) => {
+const BASE_DEMO_CONTAINERS: ChemicalContainer[] = PDF_INVENTORY_ROWS.map((row, index) => {
   const prodId = `PDF-PROD-${String(index + 1).padStart(3, '0')}`;
   const contId = `REA-${String(index + 1).padStart(3, '0')}`;
   const cabMeta = CABINET_LABEL_MAP[row.cabinet];
@@ -559,6 +561,23 @@ export const INITIAL_DEMO_CONTAINERS: ChemicalContainer[] = PDF_INVENTORY_ROWS.m
     storageClassification: cabMeta.storageClass,
   };
 });
+
+export const INITIAL_PHYSICAL_LOCATIONS: PhysicalLocationConfig[] = [
+  ...BASE_PHYSICAL_LOCATIONS,
+  ...PDF21_PHYSICAL_LOCATIONS.filter(
+    (loc) => !BASE_PHYSICAL_LOCATIONS.some((b) => b.id === loc.id || b.cabinet === loc.cabinet)
+  ),
+];
+
+export const INITIAL_DEMO_PRODUCTS: Product[] = [
+  ...BASE_DEMO_PRODUCTS,
+  ...PDF21_PRODUCTS,
+];
+
+export const INITIAL_DEMO_CONTAINERS: ChemicalContainer[] = [
+  ...BASE_DEMO_CONTAINERS,
+  ...PDF21_CONTAINERS,
+];
 
 export const INITIAL_DEMO_TRANSACTIONS: InventoryTransaction[] = [];
 

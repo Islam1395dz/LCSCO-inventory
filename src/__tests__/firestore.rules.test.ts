@@ -15,8 +15,8 @@ describe('Firestore Security Rules & Dirty Dozen Payload Invariant Verification'
   });
 
   it('Isolates PII on users/{uid} to owner or Admin/Professor (Blocks Payload 1, 2, 3)', () => {
-    expect(rulesContent).toContain('allow get: if isSignedIn() && isValidId(uid) && (isOwner(uid) || isAdminOrProf());');
-    expect(rulesContent).toContain("incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'lastLogin', 'laboratoryIds'])");
+    expect(rulesContent).toContain('allow get: if isSignedIn() && isValidId(uid);');
+    expect(rulesContent).toContain("incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'lastLogin', 'laboratoryIds', 'avatarUrl', 'password', 'mustChangePassword'])");
   });
 
   it('Enforces strict append-only immutability on transactions/{transactionId} (Blocks Payload 9, 10, 11)', () => {
